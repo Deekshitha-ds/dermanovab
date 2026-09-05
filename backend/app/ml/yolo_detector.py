@@ -4,7 +4,7 @@ from app.ml.face_mesh import extract_face
 
 
 # ============================================================
-# LOAD OLD YOLO MODEL
+# LOAD COMBINED YOLO MODEL
 # ============================================================
 
 model = YOLO("app/ml/models/best.pt")
@@ -60,7 +60,7 @@ def detect_skin(image_bytes: bytes):
     results = model(
         yolo_input,
         imgsz=640,
-        conf=0.10,
+        conf=0.25,
         verbose=True
     )
 
