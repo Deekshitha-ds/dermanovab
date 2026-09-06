@@ -17,6 +17,7 @@ treated as medical diagnoses.
 """
 
 from app.ml.yolo_detector import detect_skin
+from app.services.recommendation_service import generate_recommendations
 from app.ml.face_mesh import extract_face
 
 import hashlib
@@ -579,7 +580,12 @@ def analyze_skin(
         detections,
         visual
     )
-
+    recommendations = generate_recommendations(
+        skin_type=skin_type,
+        issues=all_issues,
+        hydration=visual["hydration"],
+        oiliness=visual["oiliness"],
+)
 
     # --------------------------------------------------------
     # YOLO confidence
@@ -627,6 +633,7 @@ def analyze_skin(
         "detected_type": skin_type,
 
         "detected_issues": all_issues,
+        "recommendations": recommendations,
 
         "detections": detections,
 
