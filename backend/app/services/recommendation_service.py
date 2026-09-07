@@ -414,3 +414,105 @@ def build_routine(skin_type, issues):
         "morning": morning,
         "evening": evening
     }
+
+def build_full_recommendation(
+    skin_type,
+    issues,
+    hydration,
+    oiliness
+):
+    """
+    Builds the complete recommendation response
+    used by the DermaNova skin analysis screen.
+    """
+
+    routine = build_routine(
+        skin_type,
+        issues
+    )
+
+    products = recommend_products(
+        skin_type,
+        issues
+    )
+
+    issue_text = " ".join(
+        str(issue).lower()
+        for issue in issues
+    )
+
+    focus = []
+    notes = []
+
+    # --------------------------------------------------------
+    # SKIN CONCERNS
+    # --------------------------------------------------------
+
+    if (
+        "dark spot" in issue_text
+        or "pigmentation" in issue_text
+        or "uneven skin tone" in issue_text
+    ):
+        focus.append("Pigmentation and uneven skin tone")
+
+    if (
+        "blackhead" in issue_text
+        or "whitehead" in issue_text
+        or "papule" in issue_text
+        or "pustule" in issue_text
+    ):
+        focus.append("Clogged pores and acne-related concerns")
+
+    if "nodule" in issue_text:
+        focus.append("Deep or persistent acne-like lesions")
+
+    if "redness" in issue_text:
+        focus.append("Skin sensitivity and redness")
+
+    if oiliness >= 70:
+        focus.append("Excess surface oil")
+
+    if hydration < 45:
+        focus.append("Skin hydration")
+
+    # --------------------------------------------------------
+    # IMPORTANT NOTES
+    # --------------------------------------------------------
+
+    if (
+        "blackhead" in issue_text
+        or "whitehead" in issue_text
+        or "papule" in issue_text
+        or "pustule" in issue_text
+        or "nodule" in issue_text
+    ):
+        notes.append(
+            "Avoid picking or squeezing detected areas."
+        )
+
+    if (
+        "dark spot" in issue_text
+        or "pigmentation" in issue_text
+    ):
+        notes.append(
+            "Consistent sun protection is important when "
+            "addressing visible pigmentation."
+        )
+
+    if "nodule" in issue_text:
+        notes.append(
+            "Persistent, painful, or deep nodules should be "
+            "evaluated by a dermatologist."
+        )
+
+    notes.append(
+        "Introduce new active skincare products gradually "
+        "and stop if significant irritation occurs."
+    )
+
+    return {
+        "routine": routine,
+        "products": products,
+        "focus": focus,
+        "notes": notes
+    }
