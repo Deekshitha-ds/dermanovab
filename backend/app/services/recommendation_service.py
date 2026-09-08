@@ -1,12 +1,17 @@
 """
-DermaNova AI recommendation engine.
+DermaNova AI Recommendation Engine
 
-Generates general skincare guidance from the visual skin
-assessment and detected concerns.
+Generates personalized cosmetic skincare guidance from
+the visual skin assessment and detected concerns.
 
-This is informational guidance, not medical diagnosis.
+This system provides informational skincare guidance.
+It is NOT a medical diagnosis or prescription.
 """
 
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 def _has_issue(issues, keyword):
     return any(
@@ -14,6 +19,17 @@ def _has_issue(issues, keyword):
         for issue in issues
     )
 
+
+def _issue_text(issues):
+    return " ".join(
+        str(issue).lower()
+        for issue in issues
+    )
+
+
+# ============================================================
+# PERSONALIZED INSIGHTS
+# ============================================================
 
 def generate_recommendations(
     skin_type,
@@ -23,85 +39,62 @@ def generate_recommendations(
 ):
     recommendations = []
 
-    # --------------------------------------------------
-    # BASIC ROUTINE
-    # --------------------------------------------------
-
-    recommendations.append({
-        "category": "Daily Routine",
-        "title": "Gentle cleansing",
-        "description": (
-            "Use a gentle cleanser and avoid aggressive scrubbing "
-            "that may irritate the skin."
-        ),
-    })
-
-    recommendations.append({
-        "category": "Sun Protection",
-        "title": "Daily sunscreen",
-        "description": (
-            "Use a broad-spectrum sunscreen during the day, "
-            "especially when pigmentation or dark spots are present."
-        ),
-    })
-
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # SKIN TYPE
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if skin_type == "Oily":
-
         recommendations.append({
             "category": "Skin Type",
-            "title": "Manage excess oil",
+            "title": "Balance excess oil",
             "description": (
-                "Choose lightweight, non-comedogenic products "
-                "and avoid overly heavy moisturizers."
+                "Your assessment indicates an oilier skin profile. "
+                "Focus on lightweight, non-comedogenic products "
+                "without repeatedly stripping the skin."
             ),
         })
 
     elif skin_type == "Dry":
-
         recommendations.append({
             "category": "Skin Type",
-            "title": "Support the skin barrier",
+            "title": "Strengthen the skin barrier",
             "description": (
-                "Use a gentle cleanser and a moisturizing product "
-                "to help maintain the skin barrier."
+                "Your assessment indicates a drier skin profile. "
+                "Prioritize gentle cleansing and consistent "
+                "moisturization to support the skin barrier."
             ),
         })
 
     elif skin_type == "Combination":
-
         recommendations.append({
             "category": "Skin Type",
             "title": "Balance different areas",
             "description": (
-                "Use lightweight products and avoid excessively "
-                "drying the oilier areas of the face."
+                "Your assessment indicates combination characteristics. "
+                "Use lightweight hydration while avoiding excessive "
+                "drying of oilier areas."
             ),
         })
 
     else:
-
         recommendations.append({
             "category": "Skin Type",
-            "title": "Maintain your routine",
+            "title": "Maintain your skin balance",
             "description": (
-                "Continue with a gentle cleanser, moisturizer, "
-                "and daily sun protection."
+                "Your assessment indicates a relatively balanced "
+                "skin profile. A simple, consistent routine can "
+                "help maintain it."
             ),
         })
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # HYDRATION
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if hydration < 45:
-
         recommendations.append({
             "category": "Hydration",
-            "title": "Increase hydration support",
+            "title": "Prioritize hydration",
             "description": (
                 "Your visual hydration indicator is relatively low. "
                 "Consider a gentle moisturizer and avoid excessive "
@@ -110,7 +103,6 @@ def generate_recommendations(
         })
 
     elif hydration >= 70:
-
         recommendations.append({
             "category": "Hydration",
             "title": "Maintain hydration",
@@ -120,138 +112,107 @@ def generate_recommendations(
             ),
         })
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # OILINESS
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if oiliness >= 70:
-
         recommendations.append({
             "category": "Oil Control",
-            "title": "Control excess surface oil",
+            "title": "Manage surface oil",
             "description": (
-                "Use lightweight, non-comedogenic skincare and "
-                "avoid repeatedly stripping the skin."
+                "Your visual oiliness indicator is relatively high. "
+                "Lightweight, non-comedogenic skincare may help "
+                "maintain a comfortable skin balance."
             ),
         })
 
-    # --------------------------------------------------
-    # ACNE-RELATED CONCERNS
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # ACNE / CLOGGED PORES
+    # --------------------------------------------------------
 
     if (
         _has_issue(issues, "papule")
         or _has_issue(issues, "pustule")
-        or _has_issue(issues, "nodule")
         or _has_issue(issues, "blackhead")
         or _has_issue(issues, "whitehead")
         or _has_issue(issues, "acne")
     ):
-
         recommendations.append({
             "category": "Acne Care",
-            "title": "Avoid picking or squeezing",
+            "title": "Keep congestion under control",
             "description": (
-                "Avoid squeezing or picking detected areas, "
-                "as this can increase irritation and the risk "
-                "of marks."
+                "Detected acne-like or clogged-pore concerns suggest "
+                "keeping the routine gentle and avoiding picking, "
+                "squeezing, or aggressive exfoliation."
             ),
         })
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # NODULES
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if _has_issue(issues, "nodule"):
-
         recommendations.append({
             "category": "Professional Care",
-            "title": "Consider dermatological evaluation",
+            "title": "Consider professional evaluation",
             "description": (
-                "Persistent, painful, or deep skin nodules may "
-                "require professional evaluation by a dermatologist."
+                "Deep, persistent, or painful nodules should be "
+                "evaluated by a qualified dermatologist rather "
+                "than managed only with cosmetic products."
             ),
         })
 
-    # --------------------------------------------------
-    # DARK SPOTS
-    # --------------------------------------------------
-
-    if _has_issue(issues, "dark spot"):
-
-        recommendations.append({
-            "category": "Pigmentation",
-            "title": "Prioritize sun protection",
-            "description": (
-                "Consistent broad-spectrum sunscreen can help "
-                "protect against worsening visible dark spots."
-            ),
-        })
-
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # PIGMENTATION
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
-    if _has_issue(issues, "pigmentation"):
-
+    if (
+        _has_issue(issues, "dark spot")
+        or _has_issue(issues, "pigmentation")
+        or _has_issue(issues, "uneven skin tone")
+    ):
         recommendations.append({
             "category": "Pigmentation",
-            "title": "Support even-looking skin tone",
+            "title": "Protect and even-looking skin tone",
             "description": (
-                "Consider gentle skincare ingredients such as "
-                "niacinamide and avoid unnecessary skin irritation."
+                "Consistent sun protection and a gentle routine "
+                "can help support a more even-looking complexion "
+                "and reduce additional visible pigmentation."
             ),
         })
 
-    # --------------------------------------------------
-    # UNEVEN SKIN TONE
-    # --------------------------------------------------
-
-    if _has_issue(issues, "uneven skin tone"):
-
-        recommendations.append({
-            "category": "Skin Tone",
-            "title": "Focus on consistent skin protection",
-            "description": (
-                "Daily sunscreen and a consistent gentle routine "
-                "can support a more even-looking skin tone."
-            ),
-        })
-
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # REDNESS
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if _has_issue(issues, "redness"):
-
         recommendations.append({
-            "category": "Redness",
-            "title": "Use gentle products",
+            "category": "Sensitivity",
+            "title": "Minimize irritation",
             "description": (
-                "Prefer fragrance-free, gentle skincare and avoid "
-                "products that cause burning or irritation."
+                "Choose gentle, fragrance-free products where "
+                "possible and avoid products that cause burning, "
+                "stinging, or persistent irritation."
             ),
         })
 
     return recommendations
 
+
 # ============================================================
-# PRODUCT RECOMMENDATIONS
+# PRODUCT CATEGORY ENGINE
 # ============================================================
 
 def recommend_products(skin_type, issues):
     """
-    Returns general skincare product-category recommendations.
+    Returns cosmetic product-category recommendations.
 
-    These are cosmetic product categories, not medical prescriptions.
+    These are NOT medical prescriptions.
     """
 
     products = []
-
-    issues_text = " ".join(
-        str(issue).lower()
-        for issue in issues
-    )
+    issues_text = _issue_text(issues)
 
     # --------------------------------------------------------
     # CLEANSER
@@ -261,21 +222,32 @@ def recommend_products(skin_type, issues):
         products.append({
             "category": "Cleanser",
             "recommendation": "Gentle foaming or gel cleanser",
-            "reason": "Suitable for removing excess surface oil."
+            "reason": "Helps remove excess surface oil without aggressive scrubbing.",
+            "priority": "High",
         })
 
     elif skin_type == "Dry":
         products.append({
             "category": "Cleanser",
             "recommendation": "Gentle hydrating cleanser",
-            "reason": "Helps cleanse without excessive dryness."
+            "reason": "Cleanses while minimizing unnecessary dryness.",
+            "priority": "High",
+        })
+
+    elif skin_type == "Combination":
+        products.append({
+            "category": "Cleanser",
+            "recommendation": "Gentle balancing cleanser",
+            "reason": "Supports cleansing without excessively drying different areas.",
+            "priority": "High",
         })
 
     else:
         products.append({
             "category": "Cleanser",
             "recommendation": "Gentle low-irritation cleanser",
-            "reason": "Suitable for maintaining a simple daily routine."
+            "reason": "Suitable for maintaining a simple daily routine.",
+            "priority": "High",
         })
 
     # --------------------------------------------------------
@@ -284,13 +256,27 @@ def recommend_products(skin_type, issues):
 
     if skin_type == "Dry":
         moisturizer = "Barrier-supporting moisturizer"
-    else:
+        moisturizer_reason = (
+            "Supports hydration and helps maintain the skin barrier."
+        )
+
+    elif skin_type == "Oily":
         moisturizer = "Lightweight non-comedogenic moisturizer"
+        moisturizer_reason = (
+            "Provides hydration without relying on a heavy texture."
+        )
+
+    else:
+        moisturizer = "Lightweight daily moisturizer"
+        moisturizer_reason = (
+            "Helps maintain comfortable and consistent hydration."
+        )
 
     products.append({
         "category": "Moisturizer",
         "recommendation": moisturizer,
-        "reason": "Helps maintain the skin barrier."
+        "reason": moisturizer_reason,
+        "priority": "High",
     })
 
     # --------------------------------------------------------
@@ -298,28 +284,37 @@ def recommend_products(skin_type, issues):
     # --------------------------------------------------------
 
     products.append({
-        "category": "Sunscreen",
+        "category": "Sun Protection",
         "recommendation": "Broad-spectrum SPF 30+ sunscreen",
-        "reason": "Helps protect skin from UV exposure."
+        "reason": (
+            "Helps protect skin from UV exposure and is especially "
+            "important when visible pigmentation or dark spots are present."
+        ),
+        "priority": "Essential",
     })
 
     # --------------------------------------------------------
-    # PIGMENTATION
+    # NIACINAMIDE
     # --------------------------------------------------------
 
     if (
         "pigmentation" in issues_text
         or "dark spot" in issues_text
         or "uneven skin tone" in issues_text
+        or skin_type == "Oily"
     ):
         products.append({
             "category": "Targeted Care",
             "recommendation": "Niacinamide-based serum",
-            "reason": "Can support a more even-looking skin tone."
+            "reason": (
+                "Can support an even-looking skin tone and may be "
+                "useful for routines focused on visible oiliness."
+            ),
+            "priority": "Targeted",
         })
 
     # --------------------------------------------------------
-    # CLOGGED PORES / ACNE-RELATED CONCERNS
+    # SALICYLIC ACID
     # --------------------------------------------------------
 
     if (
@@ -329,20 +324,28 @@ def recommend_products(skin_type, issues):
         or "pustule" in issues_text
     ):
         products.append({
-            "category": "Targeted Care",
+            "category": "Pore Care",
             "recommendation": "Salicylic-acid product",
-            "reason": "Can help with clogged pores when tolerated."
+            "reason": (
+                "Can help manage clogged pores when tolerated "
+                "and used according to product directions."
+            ),
+            "priority": "Targeted",
         })
 
     # --------------------------------------------------------
-    # REDNESS
+    # REDNESS SUPPORT
     # --------------------------------------------------------
 
     if "redness" in issues_text:
         products.append({
             "category": "Sensitive Skin Support",
             "recommendation": "Fragrance-free gentle moisturizer",
-            "reason": "Helps minimize unnecessary irritation."
+            "reason": (
+                "Helps keep the routine simple and reduce unnecessary "
+                "irritation."
+            ),
+            "priority": "Targeted",
         })
 
     return products
@@ -354,23 +357,40 @@ def recommend_products(skin_type, issues):
 
 def build_routine(skin_type, issues):
     """
-    Builds a simple morning and evening skincare routine.
+    Builds a personalized morning and evening routine.
     """
 
-    issues_text = " ".join(
-        str(issue).lower()
-        for issue in issues
-    )
+    issues_text = _issue_text(issues)
 
     morning = [
-        "Gentle cleanser",
-        "Lightweight moisturizer",
-        "Broad-spectrum SPF 30+ sunscreen"
+        {
+            "step": 1,
+            "product": "Gentle cleanser",
+            "purpose": "Cleanse the skin without unnecessary irritation."
+        },
+        {
+            "step": 2,
+            "product": "Moisturizer",
+            "purpose": "Maintain comfortable hydration and support the skin barrier."
+        },
+        {
+            "step": 3,
+            "product": "Broad-spectrum SPF 30+ sunscreen",
+            "purpose": "Protect the skin from daily UV exposure."
+        }
     ]
 
     evening = [
-        "Gentle cleanser",
-        "Moisturizer"
+        {
+            "step": 1,
+            "product": "Gentle cleanser",
+            "purpose": "Remove daily buildup and prepare the skin for nighttime care."
+        },
+        {
+            "step": 2,
+            "product": "Moisturizer",
+            "purpose": "Support overnight hydration and the skin barrier."
+        }
     ]
 
     # --------------------------------------------------------
@@ -384,11 +404,18 @@ def build_routine(skin_type, issues):
     ):
         morning.insert(
             1,
-            "Optional niacinamide serum"
+            {
+                "step": 2,
+                "product": "Optional niacinamide serum",
+                "purpose": "Support a more even-looking skin tone."
+            }
         )
 
+        for index, item in enumerate(morning, start=1):
+            item["step"] = index
+
     # --------------------------------------------------------
-    # CLOGGED PORES / ACNE
+    # CLOGGED PORES
     # --------------------------------------------------------
 
     if (
@@ -399,21 +426,201 @@ def build_routine(skin_type, issues):
     ):
         evening.insert(
             1,
-            "Optional salicylic-acid treatment"
+            {
+                "step": 2,
+                "product": "Optional salicylic-acid treatment",
+                "purpose": "Support management of clogged pores when tolerated."
+            }
         )
+
+        for index, item in enumerate(evening, start=1):
+            item["step"] = index
 
     # --------------------------------------------------------
     # DRY SKIN
     # --------------------------------------------------------
 
     if skin_type == "Dry":
-        morning[1] = "Barrier-supporting moisturizer"
-        evening[-1] = "Rich barrier-supporting moisturizer"
+
+        morning[1 if len(morning) > 3 else 1] = {
+            "step": 2,
+            "product": "Barrier-supporting moisturizer",
+            "purpose": "Provide additional hydration and barrier support."
+        }
+
+        for index, item in enumerate(morning, start=1):
+            item["step"] = index
+
+        evening[-1] = {
+            "step": len(evening),
+            "product": "Rich barrier-supporting moisturizer",
+            "purpose": "Support overnight hydration."
+        }
 
     return {
         "morning": morning,
         "evening": evening
     }
+
+
+# ============================================================
+# FOCUS AREA ENGINE
+# ============================================================
+
+def build_focus_areas(
+    skin_type,
+    issues,
+    hydration,
+    oiliness
+):
+    focus = []
+
+    issues_text = _issue_text(issues)
+
+    if (
+        "dark spot" in issues_text
+        or "pigmentation" in issues_text
+        or "uneven skin tone" in issues_text
+    ):
+        focus.append({
+            "title": "Pigmentation",
+            "priority": "High",
+            "description": "Support an even-looking complexion and protect against further visible pigmentation."
+        })
+
+    if (
+        "blackhead" in issues_text
+        or "whitehead" in issues_text
+        or "papule" in issues_text
+        or "pustule" in issues_text
+    ):
+        focus.append({
+            "title": "Clogged pores",
+            "priority": "High",
+            "description": "Keep the routine gentle while supporting clearer-looking pores."
+        })
+
+    if "nodule" in issues_text:
+        focus.append({
+            "title": "Deep lesions",
+            "priority": "High",
+            "description": "Persistent or painful deep lesions deserve professional assessment."
+        })
+
+    if "redness" in issues_text:
+        focus.append({
+            "title": "Skin comfort",
+            "priority": "Medium",
+            "description": "Minimize potential irritation and keep the routine gentle."
+        })
+
+    if oiliness >= 70:
+        focus.append({
+            "title": "Oil balance",
+            "priority": "Medium",
+            "description": "Use lightweight products while avoiding excessive stripping."
+        })
+
+    if hydration < 45:
+        focus.append({
+            "title": "Hydration",
+            "priority": "High",
+            "description": "Increase hydration support with consistent moisturizing."
+        })
+
+    if not focus:
+        focus.append({
+            "title": "Skin maintenance",
+            "priority": "Medium",
+            "description": "Maintain a consistent, gentle skincare routine."
+        })
+
+    return focus
+
+
+# ============================================================
+# AVOID LIST
+# ============================================================
+
+def build_avoid_list(skin_type, issues):
+    avoid = []
+
+    issues_text = _issue_text(issues)
+
+    avoid.append("Aggressive scrubbing")
+
+    if (
+        "blackhead" in issues_text
+        or "whitehead" in issues_text
+        or "papule" in issues_text
+        or "pustule" in issues_text
+        or "nodule" in issues_text
+    ):
+        avoid.append("Picking or squeezing detected areas")
+
+    if "redness" in issues_text:
+        avoid.append("Products that cause burning or persistent irritation")
+
+    if skin_type == "Oily":
+        avoid.append("Repeatedly stripping the skin to remove oil")
+
+    if skin_type == "Dry":
+        avoid.append("Excessive use of drying cleansers or treatments")
+
+    return avoid
+
+
+# ============================================================
+# IMPORTANT NOTES
+# ============================================================
+
+def build_notes(issues):
+    notes = []
+
+    issues_text = _issue_text(issues)
+
+    if (
+        "blackhead" in issues_text
+        or "whitehead" in issues_text
+        or "papule" in issues_text
+        or "pustule" in issues_text
+        or "nodule" in issues_text
+    ):
+        notes.append(
+            "Avoid picking or squeezing detected areas."
+        )
+
+    if (
+        "dark spot" in issues_text
+        or "pigmentation" in issues_text
+    ):
+        notes.append(
+            "Consistent sun protection is especially important "
+            "when visible pigmentation is present."
+        )
+
+    if "nodule" in issues_text:
+        notes.append(
+            "Persistent, painful, or deep nodules should be "
+            "evaluated by a dermatologist."
+        )
+
+    notes.append(
+        "Introduce new active skincare products gradually "
+        "and stop if significant irritation occurs."
+    )
+
+    notes.append(
+        "DermaNova's visual analysis is informational and "
+        "should not be treated as a medical diagnosis."
+    )
+
+    return notes
+
+
+# ============================================================
+# MASTER RECOMMENDATION
+# ============================================================
 
 def build_full_recommendation(
     skin_type,
@@ -422,8 +629,7 @@ def build_full_recommendation(
     oiliness
 ):
     """
-    Builds the complete recommendation response
-    used by the DermaNova skin analysis screen.
+    Builds the complete personalized skincare response.
     """
 
     routine = build_routine(
@@ -436,83 +642,59 @@ def build_full_recommendation(
         issues
     )
 
-    issue_text = " ".join(
-        str(issue).lower()
-        for issue in issues
+    focus = build_focus_areas(
+        skin_type,
+        issues,
+        hydration,
+        oiliness
     )
 
-    focus = []
-    notes = []
-
-    # --------------------------------------------------------
-    # SKIN CONCERNS
-    # --------------------------------------------------------
-
-    if (
-        "dark spot" in issue_text
-        or "pigmentation" in issue_text
-        or "uneven skin tone" in issue_text
-    ):
-        focus.append("Pigmentation and uneven skin tone")
-
-    if (
-        "blackhead" in issue_text
-        or "whitehead" in issue_text
-        or "papule" in issue_text
-        or "pustule" in issue_text
-    ):
-        focus.append("Clogged pores and acne-related concerns")
-
-    if "nodule" in issue_text:
-        focus.append("Deep or persistent acne-like lesions")
-
-    if "redness" in issue_text:
-        focus.append("Skin sensitivity and redness")
-
-    if oiliness >= 70:
-        focus.append("Excess surface oil")
-
-    if hydration < 45:
-        focus.append("Skin hydration")
-
-    # --------------------------------------------------------
-    # IMPORTANT NOTES
-    # --------------------------------------------------------
-
-    if (
-        "blackhead" in issue_text
-        or "whitehead" in issue_text
-        or "papule" in issue_text
-        or "pustule" in issue_text
-        or "nodule" in issue_text
-    ):
-        notes.append(
-            "Avoid picking or squeezing detected areas."
-        )
-
-    if (
-        "dark spot" in issue_text
-        or "pigmentation" in issue_text
-    ):
-        notes.append(
-            "Consistent sun protection is important when "
-            "addressing visible pigmentation."
-        )
-
-    if "nodule" in issue_text:
-        notes.append(
-            "Persistent, painful, or deep nodules should be "
-            "evaluated by a dermatologist."
-        )
-
-    notes.append(
-        "Introduce new active skincare products gradually "
-        "and stop if significant irritation occurs."
+    avoid = build_avoid_list(
+        skin_type,
+        issues
     )
+
+    notes = build_notes(issues)
+
+    # --------------------------------------------------------
+    # PERSONALIZED SUMMARY
+    # --------------------------------------------------------
+
+    if skin_type == "Oily":
+        profile = "Your skin profile appears oil-prone."
+    elif skin_type == "Dry":
+        profile = "Your skin profile appears hydration-focused."
+    elif skin_type == "Combination":
+        profile = "Your skin profile shows combination characteristics."
+    else:
+        profile = "Your skin profile appears relatively balanced."
+
+    if focus:
+        primary_focus = focus[0]["title"]
+        summary = (
+            f"{profile} Your current routine should primarily "
+            f"focus on {primary_focus.lower()} while maintaining "
+            f"gentle cleansing, hydration, and daily sun protection."
+        )
+    else:
+        summary = (
+            f"{profile} Maintain a simple, consistent routine "
+            "with gentle cleansing, hydration, and daily sun protection."
+        )
 
     return {
+        "profile": {
+            "skin_type": skin_type,
+            "summary": summary
+        },
+
         "routine": routine,
+
         "products": products,
+
         "focus": focus,
+
+        "avoid": avoid,
+
         "notes": notes
     }
