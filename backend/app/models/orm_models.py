@@ -50,6 +50,24 @@ class Product(Base):
     description = Column(Text, nullable=True)
     purchase_link = Column(String(500), nullable=True)
 
+class ProductOffer(Base):
+    __tablename__ = "product_offers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    store = Column(String(30), nullable=False)
+    price = Column(Float, nullable=False)
+    purchase_link = Column(String(1000), nullable=False)
+    offers = relationship(
+        "ProductOffer",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+    availability = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="offers")
+
 
 class Analysis(Base):
     __tablename__ = "analyses"

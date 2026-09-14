@@ -1,15 +1,22 @@
 """
 DermaNova AI Recommendation Engine
 
-Supports two recommendation flows:
+Supports:
 
-1. AI skin-analysis flow
-   - generate_recommendations()
-   - build_full_recommendation()
-
-2. Database product recommendation flow
-   - recommend_products()
-   - build_routine()
+1. AI skin-analysis guidance
+2. Database-backed personalized product recommendations
+3. Morning routine
+4. Night routine
+5. Multi-store product offers
+   - Amazon
+   - Nykaa
+   - Purplle
+6. Skin-type matching
+7. Concern matching
+8. Ingredient matching
+9. Sensitive-skin matching
+10. Budget-aware ranking
+11. Weather-aware ranking
 
 This system provides informational cosmetic skincare guidance.
 It is NOT a medical diagnosis or prescription.
@@ -62,15 +69,75 @@ def _product_ingredients(product):
     ingredients = product.ingredients or []
 
     if isinstance(ingredients, list):
-        return [_normalise(item) for item in ingredients]
+        return [
+            _normalise(item)
+            for item in ingredients
+        ]
 
     if isinstance(ingredients, str):
         return [
             _normalise(item)
             for item in ingredients.split(",")
+            if item.strip()
         ]
 
     return []
+
+
+# ============================================================
+# PRODUCT OFFER HELPERS
+# ============================================================
+
+def _product_offers(product):
+    """
+    Safely returns the product's Amazon/Nykaa/Purplle offers.
+    """
+
+    try:
+        return [
+            offer
+            for offer in (product.offers or [])
+            if getattr(offer, "availability", True)
+        ]
+    except Exception:
+        return []
+
+
+def _best_offer_price(product):
+    """
+    Returns the cheapest currently available store price.
+
+    Falls back to products.price if no store offers exist.
+    """
+
+    offers = _product_offers(product)
+
+    prices = []
+
+    for offer in offers:
+
+        try:
+            price = float(offer.price)
+
+            if price > 0:
+                prices.append(price)
+
+        except (TypeError, ValueError):
+            continue
+
+    if prices:
+        return min(prices)
+
+    try:
+        return float(product.price or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _store_name(offer):
+    return _normalise(
+        getattr(offer, "store", "")
+    )
 
 
 # ============================================================
@@ -86,7 +153,7 @@ def generate_recommendations(
     """
     Generates personalized cosmetic guidance from the AI scan.
 
-    This function is used by ai_service.py.
+    Used by ai_service.py.
     """
 
     recommendations = []
@@ -266,7 +333,7 @@ def generate_recommendations(
 
 
 # ============================================================
-# DATABASE PRODUCT HELPERS
+# DATABASE PRODUCT MATCHING
 # ============================================================
 
 def _matches_skin_type(product, skin_type):
@@ -359,13 +426,17 @@ def _is_sensitive_friendly(product):
     return True
 
 
+# ============================================================
+# INGREDIENT MATCHING
+# ============================================================
+
 def _concern_matches_ingredient(
     product,
     concerns,
 ):
     """
-    Gives additional ranking points when ingredients
-    are relevant to detected concerns.
+    Gives additional points when product ingredients
+    are relevant to the detected concerns.
     """
 
     if not concerns:
@@ -385,7 +456,7 @@ def _concern_matches_ingredient(
         concern = _normalise(concern)
 
         # ----------------------------------------------------
-        # ACNE / CLOGGED PORES
+        # BLACKHEADS / WHITEHEADS / ACNE
         # ----------------------------------------------------
 
         if any(
@@ -425,6 +496,7 @@ def _concern_matches_ingredient(
                 "niacinamide" in ingredient_text
                 or "azelaic acid" in ingredient_text
                 or "vitamin c" in ingredient_text
+                or "ascorbic acid" in ingredient_text
             ):
                 score += 12
 
@@ -473,34 +545,46 @@ def _concern_matches_ingredient(
     return score
 
 
+# ============================================================
+# CATEGORY SCORING
+# ============================================================
+
 def _category_score(product):
 
-    category = _normalise(product.category)
+    category = _normalise(
+        product.category
+    )
 
     preferred_categories = {
-        "cleanser": 8,
-        "face wash": 8,
-        "facewash": 8,
-        "moisturizer": 8,
-        "moisturiser": 8,
-        "sunscreen": 10,
-        "sun protection": 10,
-        "serum": 5,
-        "treatment": 5,
+        "cleanser": 10,
+        "face wash": 10,
+        "facewash": 10,
+        "moisturizer": 10,
+        "moisturiser": 10,
+        "sunscreen": 12,
+        "sun protection": 12,
+        "serum": 8,
+        "treatment": 8,
+        "toner": 3,
+        "exfoliator": 3,
     }
 
     return preferred_categories.get(
         category,
-        0
+        0,
     )
 
+
+# ============================================================
+# BUDGET SCORING
+# ============================================================
 
 def _budget_score(product, budget):
 
     if budget is None or budget <= 0:
         return 0
 
-    price = float(product.price or 0)
+    price = _best_offer_price(product)
 
     if price <= 0:
         return 0
@@ -520,9 +604,16 @@ def _budget_score(product, budget):
     return 0
 
 
+# ============================================================
+# RATING
+# ============================================================
+
 def _rating_score(product):
 
-    rating = float(product.rating or 0)
+    try:
+        rating = float(product.rating or 0)
+    except (TypeError, ValueError):
+        rating = 0
 
     if rating >= 4.7:
         return 10
@@ -540,7 +631,40 @@ def _rating_score(product):
 
 
 # ============================================================
-# DATABASE PRODUCT SCORING
+# STORE AVAILABILITY
+# ============================================================
+
+def _store_bonus(product):
+
+    """
+    Gives a small bonus to products that have
+    multiple valid shopping options.
+    """
+
+    offers = _product_offers(product)
+
+    stores = {
+        _store_name(offer)
+        for offer in offers
+        if _store_name(offer)
+    }
+
+    bonus = 0
+
+    if "amazon" in stores:
+        bonus += 2
+
+    if "nykaa" in stores:
+        bonus += 2
+
+    if "purplle" in stores:
+        bonus += 2
+
+    return bonus
+
+
+# ============================================================
+# PRODUCT SCORE
 # ============================================================
 
 def _score_product(
@@ -559,8 +683,13 @@ def _score_product(
     # SKIN TYPE
     # --------------------------------------------------------
 
-    requested_skin = _normalise(skin_type)
-    product_skin = _normalise(product.skin_type)
+    requested_skin = _normalise(
+        skin_type
+    )
+
+    product_skin = _normalise(
+        product.skin_type
+    )
 
     if requested_skin and product_skin:
 
@@ -582,8 +711,13 @@ def _score_product(
     # HAIR TYPE
     # --------------------------------------------------------
 
-    requested_hair = _normalise(hair_type)
-    product_hair = _normalise(product.hair_type)
+    requested_hair = _normalise(
+        hair_type
+    )
+
+    product_hair = _normalise(
+        product.hair_type
+    )
 
     if requested_hair and product_hair:
 
@@ -605,26 +739,17 @@ def _score_product(
     # CONCERNS
     # --------------------------------------------------------
 
-    product_concern = _normalise(product.concern)
-
     if concerns:
 
-        if product_concern:
-
-            for concern in concerns:
-
-                concern_text = _normalise(concern)
-
-                if (
-                    concern_text in product_concern
-                    or product_concern in concern_text
-                ):
-                    score += 30
-                    break
+        if _matches_concern(
+            product,
+            concerns,
+        ):
+            score += 30
 
         score += _concern_matches_ingredient(
             product,
-            concerns
+            concerns,
         )
 
     else:
@@ -678,13 +803,17 @@ def _score_product(
     # RATING
     # --------------------------------------------------------
 
-    score += _rating_score(product)
+    score += _rating_score(
+        product
+    )
 
     # --------------------------------------------------------
     # CATEGORY
     # --------------------------------------------------------
 
-    score += _category_score(product)
+    score += _category_score(
+        product
+    )
 
     # --------------------------------------------------------
     # BUDGET
@@ -692,7 +821,15 @@ def _score_product(
 
     score += _budget_score(
         product,
-        budget
+        budget,
+    )
+
+    # --------------------------------------------------------
+    # MULTI-STORE AVAILABILITY
+    # --------------------------------------------------------
+
+    score += _store_bonus(
+        product
     )
 
     return score
@@ -713,35 +850,26 @@ def recommend_products(
     weather_condition=None,
 ):
     """
-    Database-backed product recommendation engine.
-
-    Matches recommendations_router.py exactly.
+    Returns products ranked according to the user's
+    skin profile, concerns, budget and preferences.
     """
 
     concerns = _normalise_list(
         concerns or []
     )
 
-    # --------------------------------------------------------
-    # QUERY
-    # --------------------------------------------------------
-
     query = db.query(Product)
 
     if dermatologist_only:
 
         query = query.filter(
-            Product.dermatologist_tested == True
+            Product.dermatologist_tested.is_(True)
         )
 
     products = query.all()
 
     if not products:
         return []
-
-    # --------------------------------------------------------
-    # SCORE
-    # --------------------------------------------------------
 
     scored_products = []
 
@@ -761,9 +889,9 @@ def recommend_products(
             (product, score)
         )
 
-    # --------------------------------------------------------
-    # WEATHER
-    # --------------------------------------------------------
+    # ========================================================
+    # WEATHER ADJUSTMENT
+    # ========================================================
 
     weather = _normalise(
         weather_condition
@@ -812,7 +940,7 @@ def recommend_products(
 
                 if (
                     "niacinamide" in ingredients
-                    or "non-comedogenic" in ingredients
+                    or "non-comedogenic" in description
                 ):
                     weather_bonus += 3
 
@@ -836,28 +964,29 @@ def recommend_products(
             adjusted_products.append(
                 (
                     product,
-                    score + weather_bonus
+                    score + weather_bonus,
                 )
             )
 
         scored_products = adjusted_products
 
-    # --------------------------------------------------------
+    # ========================================================
     # SORT
-    # --------------------------------------------------------
+    # ========================================================
 
     scored_products.sort(
         key=lambda item: (
             item[1],
             float(item[0].rating or 0),
-            -float(item[0].price or 0),
+            -_best_offer_price(item[0]),
         ),
         reverse=True,
     )
 
     return [
         product
-        for product, score in scored_products
+        for product, score
+        in scored_products
     ]
 
 
@@ -867,9 +996,9 @@ def recommend_products(
 
 def build_routine(products):
     """
-    Builds morning/night routines from ranked database products.
+    Builds a personalized Morning + Night routine.
 
-    Matches recommendations_router.py exactly.
+    Products are already ranked by recommend_products().
     """
 
     if not products:
@@ -884,13 +1013,21 @@ def build_routine(products):
             "premium_choice": None,
         }
 
-    # --------------------------------------------------------
-    # FIND CATEGORY
-    # --------------------------------------------------------
+    # ========================================================
+    # FIND PRODUCT BY CATEGORY
+    # ========================================================
 
-    def find_category(*keywords):
+    def find_category(
+        keywords,
+        excluded=None,
+    ):
+
+        excluded = excluded or set()
 
         for product in products:
+
+            if product.id in excluded:
+                continue
 
             category = _normalise(
                 product.category
@@ -912,68 +1049,87 @@ def build_routine(products):
 
         return None
 
-    # --------------------------------------------------------
-    # CORE PRODUCTS
-    # --------------------------------------------------------
+    # ========================================================
+    # MORNING PRODUCTS
+    # ========================================================
 
-    cleanser = find_category(
-        "cleanser",
-        "face wash",
-        "facewash",
-    )
-
-    moisturizer = find_category(
-        "moisturizer",
-        "moisturiser",
-    )
-
-    sunscreen = find_category(
-        "sunscreen",
-        "sun protection",
-        "spf",
-    )
-
-    serum = find_category(
-        "serum",
-        "treatment",
-    )
-
-    # --------------------------------------------------------
-    # MORNING
-    # --------------------------------------------------------
+    used_morning = set()
 
     morning = []
 
+    cleanser = find_category([
+        "cleanser",
+        "face wash",
+        "facewash",
+    ])
+
     if cleanser:
         morning.append(cleanser)
+        used_morning.add(cleanser.id)
 
-    if serum and serum not in morning:
+    serum = find_category(
+        ["serum", "treatment"],
+        used_morning,
+    )
+
+    if serum:
         morning.append(serum)
+        used_morning.add(serum.id)
 
-    if moisturizer and moisturizer not in morning:
+    moisturizer = find_category(
+        ["moisturizer", "moisturiser"],
+        used_morning,
+    )
+
+    if moisturizer:
         morning.append(moisturizer)
+        used_morning.add(moisturizer.id)
 
-    if sunscreen and sunscreen not in morning:
+    sunscreen = find_category(
+        [
+            "sunscreen",
+            "sun protection",
+            "spf",
+        ],
+        used_morning,
+    )
+
+    if sunscreen:
         morning.append(sunscreen)
+        used_morning.add(sunscreen.id)
 
-    # --------------------------------------------------------
-    # NIGHT
-    # --------------------------------------------------------
+    # ========================================================
+    # NIGHT PRODUCTS
+    # ========================================================
+
+    used_night = set()
 
     night = []
 
-    if cleanser:
-        night.append(cleanser)
+    night_cleanser = cleanser
 
-    if serum and serum not in night:
-        night.append(serum)
+    if night_cleanser:
+        night.append(night_cleanser)
+        used_night.add(night_cleanser.id)
 
-    if moisturizer and moisturizer not in night:
-        night.append(moisturizer)
+    night_serum = find_category(
+        ["serum", "treatment"],
+        used_night,
+    )
 
-    # --------------------------------------------------------
+    if night_serum:
+        night.append(night_serum)
+        used_night.add(night_serum.id)
+
+    night_moisturizer = moisturizer
+
+    if night_moisturizer:
+        night.append(night_moisturizer)
+        used_night.add(night_moisturizer.id)
+
+    # ========================================================
     # FALLBACK
-    # --------------------------------------------------------
+    # ========================================================
 
     if not morning:
 
@@ -987,13 +1143,13 @@ def build_routine(products):
             :min(3, len(products))
         ]
 
-    # --------------------------------------------------------
+    # ========================================================
     # TOTALS
-    # --------------------------------------------------------
+    # ========================================================
 
     morning_total = round(
         sum(
-            float(product.price or 0)
+            _best_offer_price(product)
             for product in morning
         ),
         2,
@@ -1001,37 +1157,37 @@ def build_routine(products):
 
     night_total = round(
         sum(
-            float(product.price or 0)
+            _best_offer_price(product)
             for product in night
         ),
         2,
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # BEST CHOICE
-    # --------------------------------------------------------
+    # ========================================================
 
     best_choice = products[0]
 
-    # --------------------------------------------------------
+    # ========================================================
     # BUDGET CHOICE
-    # --------------------------------------------------------
+    # ========================================================
 
     budget_choice = min(
         products,
         key=lambda product:
-        float(product.price or 0),
+        _best_offer_price(product),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PREMIUM CHOICE
-    # --------------------------------------------------------
+    # ========================================================
 
     premium_choice = max(
         products,
         key=lambda product: (
             float(product.rating or 0),
-            float(product.price or 0),
+            _best_offer_price(product),
         ),
     )
 
@@ -1047,7 +1203,7 @@ def build_routine(products):
 
 
 # ============================================================
-# STRUCTURED AI RECOMMENDATION HELPERS
+# STRUCTURED AI PRODUCTS
 # ============================================================
 
 def _build_ai_products(
@@ -1055,9 +1211,10 @@ def _build_ai_products(
     issues,
 ):
     """
-    Category-level products for the ScanResult page.
+    Category-level recommendations for ScanResult.
 
-    This is intentionally separate from the DB product engine.
+    Database product recommendations are handled separately
+    by recommend_products().
     """
 
     products = []
@@ -1259,7 +1416,7 @@ def _build_ai_products(
 
 
 # ============================================================
-# AI ROUTINE
+# AI MORNING + NIGHT ROUTINE
 # ============================================================
 
 def _build_ai_routine(
@@ -1267,7 +1424,9 @@ def _build_ai_routine(
     issues,
 ):
     """
-    Routine used by the existing ScanResult UI.
+    Builds the informational routine used by ScanResult.
+
+    Uses Morning and Night terminology.
     """
 
     issues_text = _issue_text(
@@ -1303,7 +1462,7 @@ def _build_ai_routine(
         },
     ]
 
-    evening = [
+    night = [
         {
             "step": 1,
             "product": "Gentle cleanser",
@@ -1357,7 +1516,7 @@ def _build_ai_routine(
         or "pustule" in issues_text
     ):
 
-        evening.insert(
+        night.insert(
             1,
             {
                 "step": 2,
@@ -1390,8 +1549,8 @@ def _build_ai_routine(
                     "and barrier support."
                 )
 
-        evening[-1] = {
-            "step": len(evening),
+        night[-1] = {
+            "step": len(night),
             "product": (
                 "Rich barrier-supporting moisturizer"
             ),
@@ -1406,19 +1565,19 @@ def _build_ai_routine(
 
     for index, item in enumerate(
         morning,
-        start=1
+        start=1,
     ):
         item["step"] = index
 
     for index, item in enumerate(
-        evening,
-        start=1
+        night,
+        start=1,
     ):
         item["step"] = index
 
     return {
         "morning": morning,
-        "evening": evening,
+        "night": night,
     }
 
 
@@ -1432,6 +1591,7 @@ def _build_focus_areas(
     hydration,
     oiliness,
 ):
+
     focus = []
 
     issues_text = _issue_text(
@@ -1536,6 +1696,7 @@ def _build_avoid_list(
     skin_type,
     issues,
 ):
+
     avoid = []
 
     issues_text = _issue_text(
