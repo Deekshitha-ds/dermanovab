@@ -691,21 +691,28 @@ def _score_product(
         product.skin_type
     )
 
-    if requested_skin and product_skin:
+    if requested_skin:
 
-        if product_skin in (
-            "all",
-            "all skin types",
-            "any",
-        ):
-            score += 15
+        if product_skin:
 
-        elif requested_skin in product_skin:
-            score += 25
+            if product_skin in (
+                "all",
+                "all skin types",
+                "any",
+            ):
+                score += 15
 
-    elif requested_skin and not product_skin:
+            elif requested_skin in product_skin:
+                # Strong positive match
+                score += 35
 
-        score += 5
+            else:
+                # Strong penalty for wrong skin type
+                score -= 40
+
+        else:
+            # Product has no skin-type information
+            score += 0
 
     # --------------------------------------------------------
     # HAIR TYPE
@@ -719,21 +726,25 @@ def _score_product(
         product.hair_type
     )
 
-    if requested_hair and product_hair:
+    if requested_hair:
 
-        if product_hair in (
-            "all",
-            "all hair types",
-            "any",
-        ):
-            score += 15
+        if product_hair:
 
-        elif requested_hair in product_hair:
-            score += 25
+            if product_hair in (
+                "all",
+                "all hair types",
+                "any",
+            ):
+                score += 15
 
-    elif requested_hair and not product_hair:
+            elif requested_hair in product_hair:
+                score += 35
 
-        score += 5
+            else:
+                score -= 40
+
+        else:
+            score += 0
 
     # --------------------------------------------------------
     # CONCERNS
@@ -833,7 +844,6 @@ def _score_product(
     )
 
     return score
-
 
 # ============================================================
 # DATABASE PRODUCT RECOMMENDATION
@@ -995,14 +1005,7 @@ def recommend_products(
 # ============================================================
 
 def build_routine(products):
-    """
-    Builds a personalized Morning + Night routine.
-
-    Products are already ranked by recommend_products().
-    """
-
     if not products:
-
         return {
             "morning": [],
             "night": [],
@@ -1013,195 +1016,64 @@ def build_routine(products):
             "premium_choice": None,
         }
 
-    # ========================================================
-    # FIND PRODUCT BY CATEGORY
-    # ========================================================
+    def category(product):
+        return (product.category or "").strip().lower()
 
-    def find_category(
-        keywords,
-        excluded=None,
-    ):
+    def price(product):
+        try:
+            return float(product.price or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
-        excluded = excluded or set()
+    cleansers = [p for p in products if category(p) == "cleanser"]
+    serums = [p for p in products if category(p) == "serum"]
+    moisturizers = [p for p in products if category(p) == "moisturizer"]
+    sunscreens = [p for p in products if category(p) == "sunscreen"]
 
-        for product in products:
+    cleanser = cleansers[0] if cleansers else None
+    serum = serums[0] if serums else None
+    moisturizer = moisturizers[0] if moisturizers else None
+    sunscreen = sunscreens[0] if sunscreens else None
 
-            if product.id in excluded:
-                continue
-
-            category = _normalise(
-                product.category
-            )
-
-            name = _normalise(
-                product.name
-            )
-
-            combined = (
-                f"{category} {name}"
-            )
-
-            if any(
-                keyword in combined
-                for keyword in keywords
-            ):
-                return product
-
-        return None
-
-    # ========================================================
-    # MORNING PRODUCTS
-    # ========================================================
-
-    used_morning = set()
-
+    # Morning: Cleanser → Serum → Moisturizer → Sunscreen
     morning = []
-
-    cleanser = find_category([
-        "cleanser",
-        "face wash",
-        "facewash",
-    ])
 
     if cleanser:
         morning.append(cleanser)
-        used_morning.add(cleanser.id)
-
-    serum = find_category(
-        ["serum", "treatment"],
-        used_morning,
-    )
 
     if serum:
         morning.append(serum)
-        used_morning.add(serum.id)
-
-    moisturizer = find_category(
-        ["moisturizer", "moisturiser"],
-        used_morning,
-    )
 
     if moisturizer:
         morning.append(moisturizer)
-        used_morning.add(moisturizer.id)
-
-    sunscreen = find_category(
-        [
-            "sunscreen",
-            "sun protection",
-            "spf",
-        ],
-        used_morning,
-    )
 
     if sunscreen:
         morning.append(sunscreen)
-        used_morning.add(sunscreen.id)
 
-    # ========================================================
-    # NIGHT PRODUCTS
-    # ========================================================
-
-    used_night = set()
-
+    # Night: Cleanser → Serum/Treatment → Moisturizer
     night = []
 
-    night_cleanser = cleanser
+    if cleanser:
+        night.append(cleanser)
 
-    if night_cleanser:
-        night.append(night_cleanser)
-        used_night.add(night_cleanser.id)
+    if serum:
+        night.append(serum)
 
-    night_serum = find_category(
-        ["serum", "treatment"],
-        used_night,
-    )
+    if moisturizer:
+        night.append(moisturizer)
 
-    if night_serum:
-        night.append(night_serum)
-        used_night.add(night_serum.id)
-
-    night_moisturizer = moisturizer
-
-    if night_moisturizer:
-        night.append(night_moisturizer)
-        used_night.add(night_moisturizer.id)
-
-    # ========================================================
-    # FALLBACK
-    # ========================================================
-
-    if not morning:
-
-        morning = products[
-            :min(3, len(products))
-        ]
-
-    if not night:
-
-        night = products[
-            :min(3, len(products))
-        ]
-
-    # ========================================================
-    # TOTALS
-    # ========================================================
-
-    morning_total = round(
-        sum(
-            _best_offer_price(product)
-            for product in morning
-        ),
-        2,
-    )
-
-    night_total = round(
-        sum(
-            _best_offer_price(product)
-            for product in night
-        ),
-        2,
-    )
-
-    # ========================================================
-    # BEST CHOICE
-    # ========================================================
-
-    best_choice = products[0]
-
-    # ========================================================
-    # BUDGET CHOICE
-    # ========================================================
-
-    budget_choice = min(
-        products,
-        key=lambda product:
-        _best_offer_price(product),
-    )
-
-    # ========================================================
-    # PREMIUM CHOICE
-    # ========================================================
-
-    premium_choice = max(
-        products,
-        key=lambda product: (
-            float(product.rating or 0),
-            _best_offer_price(product),
-        ),
-    )
+    morning_total = sum(price(p) for p in morning)
+    night_total = sum(price(p) for p in night)
 
     return {
         "morning": morning,
         "night": night,
-        "morning_total": morning_total,
-        "night_total": night_total,
-        "best_choice": best_choice,
-        "budget_choice": budget_choice,
-        "premium_choice": premium_choice,
+        "morning_total": round(morning_total, 2),
+        "night_total": round(night_total, 2),
+        "best_choice": products[0] if products else None,
+        "budget_choice": min(products, key=price) if products else None,
+        "premium_choice": max(products, key=price) if products else None,
     }
-
-
 # ============================================================
 # STRUCTURED AI PRODUCTS
 # ============================================================
