@@ -882,7 +882,248 @@ def _analyze_pigmentation(image_bytes: bytes):
             "/static/pigmentation_result.jpg"
     }
 
+def _analyze_uneven_tone(image_bytes: bytes):
+    """
+    Estimate and highlight regions of uneven skin tone.
 
+    This is a visual computer-vision estimate and is not
+    a medical diagnosis.
+    """
+
+    original, face, face_box = extract_face(image_bytes)
+
+    if face is None or face.size == 0:
+        return {
+            "score": 0,
+            "overlay_path": None
+        }
+
+    # --------------------------------------------------------
+    # Resize face for analysis
+    # --------------------------------------------------------
+
+    face_resized = cv2.resize(
+        face,
+        (512, 512)
+    )
+
+    # --------------------------------------------------------
+    # Convert to LAB
+    # --------------------------------------------------------
+
+    lab = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2LAB
+    )
+
+    L, A, B = cv2.split(lab)
+
+    # --------------------------------------------------------
+    # Build skin mask
+    # --------------------------------------------------------
+
+    ycrcb = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2YCrCb
+    )
+
+    Y, Cr, Cb = cv2.split(ycrcb)
+
+    skin_mask = (
+        (Cr > 125) &
+        (Cr < 175) &
+        (Cb > 70) &
+        (Cb < 140) &
+        (L > 35)
+    ).astype(np.uint8) * 255
+
+    kernel = np.ones(
+        (5, 5),
+        np.uint8
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    skin_pixels = L[
+        skin_mask > 0
+    ]
+
+    if len(skin_pixels) < 500:
+        return {
+            "score": 0,
+            "overlay_path": None
+        }
+
+    # --------------------------------------------------------
+    # Measure local tone variation
+    # --------------------------------------------------------
+
+    L_float = L.astype(
+        np.float32
+    )
+
+    local_average = cv2.GaussianBlur(
+        L_float,
+        (31, 31),
+        0
+    )
+
+    local_difference = cv2.absdiff(
+        L_float,
+        local_average
+    )
+
+    # Only look at skin.
+    uneven_mask = (
+        (skin_mask > 0) &
+        (local_difference > 7)
+    ).astype(np.uint8) * 255
+
+    # Remove tiny isolated areas.
+    uneven_mask = cv2.morphologyEx(
+        uneven_mask,
+        cv2.MORPH_OPEN,
+        np.ones((5, 5), np.uint8)
+    )
+
+    uneven_mask = cv2.morphologyEx(
+        uneven_mask,
+        cv2.MORPH_CLOSE,
+        np.ones((9, 9), np.uint8)
+    )
+
+    # Smooth the mask so the result looks premium.
+    uneven_mask = cv2.GaussianBlur(
+        uneven_mask,
+        (15, 15),
+        0
+    )
+
+    # --------------------------------------------------------
+    # Calculate score
+    # --------------------------------------------------------
+
+    skin_area = np.sum(
+        skin_mask > 0
+    )
+
+    uneven_area = np.sum(
+        uneven_mask > 60
+    )
+
+    ratio = (
+        uneven_area
+        /
+        max(skin_area, 1)
+        * 100
+    )
+
+    score = np.interp(
+        ratio,
+        [2, 20],
+        [5, 95]
+    )
+
+    score = float(
+        np.clip(
+            score,
+            0,
+            100
+        )
+    )
+
+    # --------------------------------------------------------
+    # Create visual overlay
+    # --------------------------------------------------------
+
+    tone_color = np.zeros_like(
+        face_resized
+    )
+
+    # BGR yellow/golden tone
+    tone_color[:, :] = (
+        40,
+        190,
+        230
+    )
+
+    blended = cv2.addWeighted(
+        face_resized,
+        0.76,
+        tone_color,
+        0.24,
+        0
+    )
+
+    mask_3d = cv2.cvtColor(
+        uneven_mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    highlighted = np.where(
+        mask_3d > 35,
+        blended,
+        face_resized
+    )
+
+    # --------------------------------------------------------
+    # Put result back onto original image
+    # --------------------------------------------------------
+
+    x1, y1, x2, y2 = face_box
+
+    face_width = max(
+        x2 - x1,
+        1
+    )
+
+    face_height = max(
+        y2 - y1,
+        1
+    )
+
+    highlighted_original_size = cv2.resize(
+        highlighted,
+        (
+            face_width,
+            face_height
+        )
+    )
+
+    result = original.copy()
+
+    result[
+        y1:y2,
+        x1:x2
+    ] = highlighted_original_size
+
+    output_path = (
+        "app/static/uneven_tone_result.jpg"
+    )
+
+    cv2.imwrite(
+        output_path,
+        result
+    )
+
+    return {
+        "score": round(
+            score,
+            1
+        ),
+        "overlay_path":
+            "/static/uneven_tone_result.jpg"
+    }
 # ============================================================
 # SKIN ANALYSIS
 # ============================================================
@@ -917,7 +1158,9 @@ def analyze_skin(
     pigmentation = _analyze_pigmentation(
     image_bytes
 )
-
+    uneven_tone = _analyze_uneven_tone(
+    image_bytes
+)
 
     # --------------------------------------------------------
     # YOLO issue names
@@ -1079,6 +1322,7 @@ def analyze_skin(
         },
         "dark_circles": dark_circles,
         "pigmentation": pigmentation,
+        "uneven_tone": uneven_tone,
 
         "processed_image":
             "/static/scan_result.jpg",
