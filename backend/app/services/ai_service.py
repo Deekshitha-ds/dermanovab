@@ -21,7 +21,10 @@ from app.services.recommendation_service import (
     generate_recommendations,
     build_full_recommendation
 )
-from app.ml.face_mesh import extract_face
+from app.ml.face_mesh import (
+    extract_face,
+    get_under_eye_regions,
+)
 
 import hashlib
 import random
@@ -479,7 +482,186 @@ def _calculate_health(
         )),
         1
     )
+def _analyze_dark_circles(image_bytes):
+    """
+    Estimate dark-circle intensity specifically in the
+    under-eye regions detected by MediaPipe Face Mesh.
 
+    Returns scores and an overlay image.
+    """
+
+    original, left_region, right_region = get_under_eye_regions(
+        image_bytes
+    )
+
+    if original is None or left_region is None or right_region is None:
+        return {
+            "left": 0,
+            "right": 0,
+            "overall": 0,
+            "overlay_path": None,
+        }
+
+    h, w = original.shape[:2]
+
+    mask = np.zeros(
+        (h, w),
+        dtype=np.uint8
+    )
+
+    cv2.fillPoly(
+        mask,
+        [left_region],
+        255
+    )
+
+    cv2.fillPoly(
+        mask,
+        [right_region],
+        255
+    )
+
+    # Convert image to LAB.
+    lab = cv2.cvtColor(
+        original,
+        cv2.COLOR_BGR2LAB
+    )
+
+    luminance = lab[:, :, 0]
+
+    # Analyze each eye independently.
+    def region_score(region):
+        region_mask = np.zeros(
+            (h, w),
+            dtype=np.uint8
+        )
+
+        cv2.fillPoly(
+            region_mask,
+            [region],
+            255
+        )
+
+        pixels = luminance[
+            region_mask > 0
+        ]
+
+        if len(pixels) < 20:
+            return 0
+
+        # Lower L value = darker region.
+        mean_l = float(
+            np.mean(pixels)
+        )
+
+        # Convert darkness into a 0-100 score.
+        score = 100 - (
+            mean_l / 255 * 100
+        )
+
+        return float(
+            np.clip(
+                score,
+                0,
+                100
+            )
+        )
+
+    left_score = region_score(
+        left_region
+    )
+
+    right_score = region_score(
+        right_region
+    )
+
+    overall_score = (
+        left_score + right_score
+    ) / 2
+
+    # ---------------------------------------------------------
+    # Create a soft visual overlay.
+    # ---------------------------------------------------------
+
+    overlay = original.copy()
+
+    # Dark-circle visualization color.
+    # BGR = blue/purple.
+    overlay_color = (
+        180,
+        80,
+        180
+    )
+
+    colored = np.zeros_like(
+        original
+    )
+
+    colored[:, :] = overlay_color
+
+    blended = cv2.addWeighted(
+        original,
+        0.70,
+        colored,
+        0.30,
+        0
+    )
+
+    # Only apply the color inside the eye masks.
+    mask_3d = cv2.cvtColor(
+        mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    highlighted = np.where(
+        mask_3d > 0,
+        blended,
+        original
+    )
+
+    # Draw a soft contour around both regions.
+    cv2.polylines(
+        highlighted,
+        [left_region],
+        True,
+        overlay_color,
+        2
+    )
+
+    cv2.polylines(
+        highlighted,
+        [right_region],
+        True,
+        overlay_color,
+        2
+    )
+
+    output_path = (
+        "app/static/dark_circles_result.jpg"
+    )
+
+    cv2.imwrite(
+        output_path,
+        highlighted
+    )
+
+    return {
+        "left": round(
+            left_score,
+            2
+        ),
+        "right": round(
+            right_score,
+            2
+        ),
+        "overall": round(
+            overall_score,
+            2
+        ),
+        "overlay_path": (
+            "/static/dark_circles_result.jpg"
+        ),
+    }
 
 # ============================================================
 # SKIN ANALYSIS
@@ -505,6 +687,13 @@ def analyze_skin(
     visual = _analyze_skin_color(
         image_bytes
     )
+    # --------------------------------------------------------
+    # Dark-circle analysis
+    # --------------------------------------------------------
+
+    dark_circles = _analyze_dark_circles(
+    image_bytes
+)
 
 
     # --------------------------------------------------------
@@ -665,6 +854,7 @@ def analyze_skin(
                 "redness"
             ]
         },
+        "dark_circles": dark_circles,
 
         "processed_image":
             "/static/scan_result.jpg",
