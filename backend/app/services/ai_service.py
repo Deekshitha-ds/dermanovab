@@ -662,6 +662,226 @@ def _analyze_dark_circles(image_bytes):
             "/static/dark_circles_result.jpg"
         ),
     }
+def _analyze_pigmentation(image_bytes: bytes):
+    """
+    Estimate and highlight pigmentation regions on the face.
+
+    This is a visual computer-vision estimate and is not
+    a medical diagnosis.
+    """
+
+    original, face, face_box = extract_face(image_bytes)
+
+    if face is None or face.size == 0:
+        return {
+            "score": 0,
+            "overlay_path": None
+        }
+
+    # Resize only for analysis.
+    face_resized = cv2.resize(
+        face,
+        (512, 512)
+    )
+
+    lab = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2LAB
+    )
+
+    ycrcb = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2YCrCb
+    )
+
+    L, A, B = cv2.split(lab)
+    Y, Cr, Cb = cv2.split(ycrcb)
+
+    # --------------------------------------------------------
+    # Skin mask
+    # --------------------------------------------------------
+
+    skin_mask = (
+        (Cr > 125) &
+        (Cr < 175) &
+        (Cb > 70) &
+        (Cb < 140) &
+        (L > 35)
+    ).astype(np.uint8) * 255
+
+    # Clean mask.
+    kernel = np.ones(
+        (5, 5),
+        np.uint8
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    skin_pixels = L[
+        skin_mask > 0
+    ]
+
+    if len(skin_pixels) < 500:
+        return {
+            "score": 0,
+            "overlay_path": None
+        }
+
+    # --------------------------------------------------------
+    # Estimate person's surrounding skin tone
+    # --------------------------------------------------------
+
+    median_l = float(
+        np.median(skin_pixels)
+    )
+
+    # Regions considerably darker than surrounding skin.
+    pigmentation_mask = (
+        (skin_mask > 0) &
+        (L < median_l - 18)
+    ).astype(np.uint8) * 255
+
+    # Remove tiny isolated areas.
+    pigmentation_mask = cv2.morphologyEx(
+        pigmentation_mask,
+        cv2.MORPH_OPEN,
+        np.ones((5, 5), np.uint8)
+    )
+
+    pigmentation_mask = cv2.morphologyEx(
+        pigmentation_mask,
+        cv2.MORPH_CLOSE,
+        np.ones((9, 9), np.uint8)
+    )
+
+    # Slight blur for a softer overlay.
+    pigmentation_mask = cv2.GaussianBlur(
+        pigmentation_mask,
+        (11, 11),
+        0
+    )
+
+    # --------------------------------------------------------
+    # Score
+    # --------------------------------------------------------
+
+    skin_area = np.sum(
+        skin_mask > 0
+    )
+
+    pigmentation_area = np.sum(
+        pigmentation_mask > 80
+    )
+
+    ratio = (
+        pigmentation_area
+        /
+        max(skin_area, 1)
+        * 100
+    )
+
+    score = np.interp(
+        ratio,
+        [1, 15],
+        [5, 95]
+    )
+
+    score = float(
+        np.clip(
+            score,
+            0,
+            100
+        )
+    )
+
+    # --------------------------------------------------------
+    # Create overlay on the face crop
+    # --------------------------------------------------------
+
+    overlay = face_resized.copy()
+
+    pigment_color = np.zeros_like(
+        face_resized
+    )
+
+    # BGR purple.
+    pigment_color[:, :] = (
+        180,
+        80,
+        220
+    )
+
+    blended = cv2.addWeighted(
+        face_resized,
+        0.72,
+        pigment_color,
+        0.28,
+        0
+    )
+
+    mask_3d = cv2.cvtColor(
+        pigmentation_mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    highlighted = np.where(
+        mask_3d > 40,
+        blended,
+        face_resized
+    )
+
+    # --------------------------------------------------------
+    # Put overlay back onto original image
+    # --------------------------------------------------------
+
+    x1, y1, x2, y2 = face_box
+
+    face_width = x2 - x1
+    face_height = y2 - y1
+
+    highlighted_original_size = cv2.resize(
+        highlighted,
+        (
+            face_width,
+            face_height
+        )
+    )
+
+    result = original.copy()
+
+    result[
+        y1:y2,
+        x1:x2
+    ] = highlighted_original_size
+
+    output_path = (
+        "app/static/pigmentation_result.jpg"
+    )
+
+    cv2.imwrite(
+        output_path,
+        result
+    )
+
+    return {
+        "score": round(
+            score,
+            1
+        ),
+        "overlay_path":
+            "/static/pigmentation_result.jpg"
+    }
+
 
 # ============================================================
 # SKIN ANALYSIS
@@ -692,6 +912,9 @@ def analyze_skin(
     # --------------------------------------------------------
 
     dark_circles = _analyze_dark_circles(
+    image_bytes
+)
+    pigmentation = _analyze_pigmentation(
     image_bytes
 )
 
@@ -855,6 +1078,7 @@ def analyze_skin(
             ]
         },
         "dark_circles": dark_circles,
+        "pigmentation": pigmentation,
 
         "processed_image":
             "/static/scan_result.jpg",
