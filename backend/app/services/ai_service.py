@@ -1124,6 +1124,505 @@ def _analyze_uneven_tone(image_bytes: bytes):
         "overlay_path":
             "/static/uneven_tone_result.jpg"
     }
+
+def _build_combined_skin_overlay(
+    image_bytes: bytes,
+    detections
+):
+    """
+    Build one combined annotated face image containing:
+
+    - YOLO acne detections
+    - Pigmentation regions
+    - Uneven skin tone regions
+    - Dark-circle regions
+
+    This is a visual computer-vision result and is not
+    a medical diagnosis.
+    """
+
+    original, face, face_box = extract_face(
+        image_bytes
+    )
+
+    if (
+        original is None
+        or face is None
+        or face.size == 0
+        or face_box is None
+    ):
+        return None
+
+    result = original.copy()
+
+    # ========================================================
+    # 1. ADD YOLO ACNE DETECTIONS
+    # ========================================================
+
+    for detection in detections:
+
+        bbox = detection.get("bbox")
+
+        if not bbox:
+            continue
+
+        x1 = int(bbox["x"])
+        y1 = int(bbox["y"])
+        x2 = x1 + int(bbox["width"])
+        y2 = y1 + int(bbox["height"])
+
+        issue = str(
+            detection.get(
+                "issue",
+                "skin concern"
+            )
+        ).lower()
+
+        # Match the colors already used by YOLO.
+        if issue == "blackheads":
+            color = (0, 165, 255)
+
+        elif issue == "dark spot":
+            color = (255, 0, 255)
+
+        elif issue == "nodules":
+            color = (0, 0, 255)
+
+        elif issue == "papules":
+            color = (255, 255, 0)
+
+        elif issue == "pustules":
+            color = (0, 0, 255)
+
+        elif issue == "whiteheads":
+            color = (255, 165, 0)
+
+        else:
+            color = (0, 255, 0)
+
+        cv2.rectangle(
+            result,
+            (x1, y1),
+            (x2, y2),
+            color,
+            2
+        )
+
+        confidence = detection.get(
+            "confidence"
+        )
+
+        if confidence is not None:
+
+            label = (
+                f"{issue} "
+                f"{float(confidence):.1f}%"
+            )
+
+            cv2.putText(
+                result,
+                label,
+                (
+                    x1,
+                    max(y1 - 10, 25)
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA
+            )
+
+    # ========================================================
+    # 2. CREATE FACE-LEVEL MASKS
+    # ========================================================
+
+    x1, y1, x2, y2 = face_box
+
+    face_width = max(
+        x2 - x1,
+        1
+    )
+
+    face_height = max(
+        y2 - y1,
+        1
+    )
+
+    face_resized = cv2.resize(
+        face,
+        (512, 512)
+    )
+
+    lab = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2LAB
+    )
+
+    L, A, B = cv2.split(lab)
+
+    ycrcb = cv2.cvtColor(
+        face_resized,
+        cv2.COLOR_BGR2YCrCb
+    )
+
+    Y, Cr, Cb = cv2.split(ycrcb)
+
+    # ========================================================
+    # 3. SKIN MASK
+    # ========================================================
+
+    skin_mask = (
+        (Cr > 125) &
+        (Cr < 175) &
+        (Cb > 70) &
+        (Cb < 140) &
+        (L > 35)
+    ).astype(np.uint8) * 255
+
+    kernel = np.ones(
+        (5, 5),
+        np.uint8
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+
+    skin_mask = cv2.morphologyEx(
+        skin_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    # ========================================================
+    # 4. PIGMENTATION MASK
+    # ========================================================
+
+    skin_pixels = L[
+        skin_mask > 0
+    ]
+
+    if len(skin_pixels) >= 500:
+
+        median_l = float(
+            np.median(skin_pixels)
+        )
+
+        pigmentation_mask = (
+            (skin_mask > 0) &
+            (L < median_l - 18)
+        ).astype(np.uint8) * 255
+
+        pigmentation_mask = cv2.morphologyEx(
+            pigmentation_mask,
+            cv2.MORPH_OPEN,
+            np.ones((5, 5), np.uint8)
+        )
+
+        pigmentation_mask = cv2.morphologyEx(
+            pigmentation_mask,
+            cv2.MORPH_CLOSE,
+            np.ones((9, 9), np.uint8)
+        )
+
+        pigmentation_mask = cv2.GaussianBlur(
+            pigmentation_mask,
+            (11, 11),
+            0
+        )
+
+    else:
+
+        pigmentation_mask = np.zeros(
+            (512, 512),
+            dtype=np.uint8
+        )
+
+    # ========================================================
+    # 5. UNEVEN-TONE MASK
+    # ========================================================
+
+    L_float = L.astype(
+        np.float32
+    )
+
+    local_average = cv2.GaussianBlur(
+        L_float,
+        (31, 31),
+        0
+    )
+
+    local_difference = cv2.absdiff(
+        L_float,
+        local_average
+    )
+
+    uneven_mask = (
+        (skin_mask > 0) &
+        (local_difference > 7)
+    ).astype(np.uint8) * 255
+
+    uneven_mask = cv2.morphologyEx(
+        uneven_mask,
+        cv2.MORPH_OPEN,
+        np.ones((5, 5), np.uint8)
+    )
+
+    uneven_mask = cv2.morphologyEx(
+        uneven_mask,
+        cv2.MORPH_CLOSE,
+        np.ones((9, 9), np.uint8)
+    )
+
+    uneven_mask = cv2.GaussianBlur(
+        uneven_mask,
+        (15, 15),
+        0
+    )
+
+    # ========================================================
+    # 6. DARK-CIRCLE REGIONS
+    # ========================================================
+
+    _, left_eye_region, right_eye_region = (
+        get_under_eye_regions(image_bytes)
+    )
+
+    # Create an original-image mask for dark circles.
+    dark_circle_mask_original = np.zeros(
+        original.shape[:2],
+        dtype=np.uint8
+    )
+
+    if left_eye_region is not None:
+
+        cv2.fillPoly(
+            dark_circle_mask_original,
+            [left_eye_region],
+            255
+        )
+
+    if right_eye_region is not None:
+
+        cv2.fillPoly(
+            dark_circle_mask_original,
+            [right_eye_region],
+            255
+        )
+
+    # ========================================================
+    # 7. APPLY PIGMENTATION + UNEVEN TONE TO FACE
+    # ========================================================
+
+    # Purple = pigmentation.
+    pigment_color = np.zeros_like(
+        face_resized
+    )
+
+    pigment_color[:, :] = (
+        180,
+        80,
+        220
+    )
+
+    pigment_blended = cv2.addWeighted(
+        face_resized,
+        0.78,
+        pigment_color,
+        0.22,
+        0
+    )
+
+    pigment_mask_3d = cv2.cvtColor(
+        pigmentation_mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    face_with_pigmentation = np.where(
+        pigment_mask_3d > 45,
+        pigment_blended,
+        face_resized
+    )
+
+    # Yellow = uneven skin tone.
+    tone_color = np.zeros_like(
+        face_resized
+    )
+
+    tone_color[:, :] = (
+        40,
+        190,
+        230
+    )
+
+    tone_blended = cv2.addWeighted(
+        face_with_pigmentation,
+        0.80,
+        tone_color,
+        0.20,
+        0
+    )
+
+    uneven_mask_3d = cv2.cvtColor(
+        uneven_mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    face_with_tone = np.where(
+        uneven_mask_3d > 40,
+        tone_blended,
+        face_with_pigmentation
+    )
+
+    # ========================================================
+    # 8. PLACE FACE OVERLAY BACK ON ORIGINAL
+    # ========================================================
+
+    face_overlay_original_size = cv2.resize(
+        face_with_tone,
+        (
+            face_width,
+            face_height
+        )
+    )
+
+    result[
+        y1:y2,
+        x1:x2
+    ] = face_overlay_original_size
+
+    # ========================================================
+    # 9. APPLY DARK-CIRCLE OVERLAY
+    # ========================================================
+
+    dark_color = np.zeros_like(
+        result
+    )
+
+    # Blue = dark circles.
+    dark_color[:, :] = (
+        220,
+        100,
+        40
+    )
+
+    dark_blended = cv2.addWeighted(
+        result,
+        0.78,
+        dark_color,
+        0.22,
+        0
+    )
+
+    dark_mask_3d = cv2.cvtColor(
+        dark_circle_mask_original,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    result = np.where(
+        dark_mask_3d > 40,
+        dark_blended,
+        result
+    )
+
+    # ========================================================
+    # 10. DRAW DARK-CIRCLE CONTOURS
+    # ========================================================
+
+    if left_eye_region is not None:
+
+        cv2.polylines(
+            result,
+            [left_eye_region],
+            True,
+            (220, 100, 40),
+            2
+        )
+
+    if right_eye_region is not None:
+
+        cv2.polylines(
+            result,
+            [right_eye_region],
+            True,
+            (220, 100, 40),
+            2
+        )
+
+    # ========================================================
+    # 11. LEGEND
+    # ========================================================
+
+    legend_x = 30
+    legend_y = 40
+
+    legend_items = [
+        (
+            (0, 0, 255),
+            "Acne"
+        ),
+        (
+            (180, 80, 220),
+            "Pigmentation"
+        ),
+        (
+            (40, 190, 230),
+            "Uneven skin tone"
+        ),
+        (
+            (220, 100, 40),
+            "Dark circles"
+        ),
+    ]
+
+    for color, label in legend_items:
+
+        cv2.circle(
+            result,
+            (
+                legend_x,
+                legend_y
+            ),
+            6,
+            color,
+            -1
+        )
+
+        cv2.putText(
+            result,
+            label,
+            (
+                legend_x + 15,
+                legend_y + 5
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+        legend_y += 28
+
+    # ========================================================
+    # 12. SAVE
+    # ========================================================
+
+    output_path = (
+        "app/static/combined_skin_result.jpg"
+    )
+
+    cv2.imwrite(
+        output_path,
+        result
+    )
+
+    return (
+        "/static/combined_skin_result.jpg"
+    )
 # ============================================================
 # SKIN ANALYSIS
 # ============================================================
@@ -1139,6 +1638,10 @@ def analyze_skin(
     detections, output_path = detect_skin(
         image_bytes
     )
+    combined_overlay = _build_combined_skin_overlay(
+    image_bytes,
+    detections
+)
 
 
     # --------------------------------------------------------
@@ -1324,8 +1827,7 @@ def analyze_skin(
         "pigmentation": pigmentation,
         "uneven_tone": uneven_tone,
 
-        "processed_image":
-            "/static/scan_result.jpg",
+        "processed_image": combined_overlay,
 
         "scores": {
 
