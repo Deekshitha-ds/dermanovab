@@ -662,15 +662,21 @@ def _analyze_dark_circles(image_bytes):
             "/static/dark_circles_result.jpg"
         ),
     }
+
 def _analyze_pigmentation(image_bytes: bytes):
     """
-    Estimate and highlight pigmentation regions on the face.
+    Detect localized darker pigmentation-like regions.
 
-    This is a visual computer-vision estimate and is not
-    a medical diagnosis.
+    The algorithm compares each skin region with its local
+    surrounding brightness instead of using one global
+    face brightness value.
+
+    This is a visual estimate and is not a medical diagnosis.
     """
 
-    original, face, face_box = extract_face(image_bytes)
+    original, face, face_box = extract_face(
+        image_bytes
+    )
 
     if face is None or face.size == 0:
         return {
@@ -678,11 +684,19 @@ def _analyze_pigmentation(image_bytes: bytes):
             "overlay_path": None
         }
 
-    # Resize only for analysis.
+    # --------------------------------------------------------
+    # Resize for analysis
+    # --------------------------------------------------------
+
     face_resized = cv2.resize(
         face,
-        (512, 512)
+        (512, 512),
+        interpolation=cv2.INTER_AREA
     )
+
+    # --------------------------------------------------------
+    # Color spaces
+    # --------------------------------------------------------
 
     lab = cv2.cvtColor(
         face_resized,
@@ -709,22 +723,25 @@ def _analyze_pigmentation(image_bytes: bytes):
         (L > 35)
     ).astype(np.uint8) * 255
 
-    # Clean mask.
-    kernel = np.ones(
-        (5, 5),
-        np.uint8
-    )
-
+    # Clean skin mask.
     skin_mask = cv2.morphologyEx(
         skin_mask,
         cv2.MORPH_OPEN,
-        kernel
+        np.ones((5, 5), np.uint8)
     )
 
     skin_mask = cv2.morphologyEx(
         skin_mask,
         cv2.MORPH_CLOSE,
-        kernel
+        np.ones((7, 7), np.uint8)
+    )
+
+    # Shrink the mask slightly so hairline/face-edge shadows
+    # do not become pigmentation.
+    skin_mask = cv2.erode(
+        skin_mask,
+        np.ones((13, 13), np.uint8),
+        iterations=1
     )
 
     skin_pixels = L[
@@ -738,62 +755,130 @@ def _analyze_pigmentation(image_bytes: bytes):
         }
 
     # --------------------------------------------------------
-    # Estimate person's surrounding skin tone
+    # LOCAL brightness comparison
     # --------------------------------------------------------
 
-    median_l = float(
-        np.median(skin_pixels)
+    L_float = L.astype(
+        np.float32
     )
 
-    # Regions considerably darker than surrounding skin.
-    pigmentation_mask = (
+    # Estimate the surrounding skin brightness.
+    local_average = cv2.GaussianBlur(
+        L_float,
+        (41, 41),
+        0
+    )
+
+    # Positive value means the pixel is darker than
+    # its surrounding area.
+    local_darkness = (
+        local_average - L_float
+    )
+
+    # --------------------------------------------------------
+    # Candidate pigmentation
+    # --------------------------------------------------------
+
+    raw_mask = (
         (skin_mask > 0) &
-        (L < median_l - 18)
+        (local_darkness > 15)
     ).astype(np.uint8) * 255
 
-    # Remove tiny isolated areas.
-    pigmentation_mask = cv2.morphologyEx(
-        pigmentation_mask,
+    # Clean isolated noise.
+    raw_mask = cv2.morphologyEx(
+        raw_mask,
         cv2.MORPH_OPEN,
         np.ones((5, 5), np.uint8)
     )
 
-    pigmentation_mask = cv2.morphologyEx(
-        pigmentation_mask,
+    raw_mask = cv2.morphologyEx(
+        raw_mask,
         cv2.MORPH_CLOSE,
-        np.ones((9, 9), np.uint8)
+        np.ones((7, 7), np.uint8)
     )
 
-    # Slight blur for a softer overlay.
+    # --------------------------------------------------------
+    # Keep only localized regions
+    # --------------------------------------------------------
+
+    binary = (
+        raw_mask > 0
+    ).astype(np.uint8)
+
+    count, labels, stats, _ = (
+        cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8
+        )
+    )
+
+    pigmentation_mask = np.zeros(
+        (512, 512),
+        dtype=np.uint8
+    )
+
+    for i in range(1, count):
+
+        area = stats[
+            i,
+            cv2.CC_STAT_AREA
+        ]
+
+        # Ignore huge regions.
+        #
+        # Huge regions are usually:
+        # - shadows
+        # - lighting gradients
+        # - eyelid/eye regions
+        # - general skin-tone differences
+        #
+        # Keep only reasonably localized areas.
+
+        if 80 <= area <= 2500:
+
+            component = (
+                labels == i
+            ).astype(np.uint8) * 255
+
+            pigmentation_mask = cv2.bitwise_or(
+                pigmentation_mask,
+                component
+            )
+
+    # --------------------------------------------------------
+    # Smooth only the boundaries
+    # --------------------------------------------------------
+
     pigmentation_mask = cv2.GaussianBlur(
         pigmentation_mask,
-        (11, 11),
+        ( nine := 9, nine ),
         0
     )
 
     # --------------------------------------------------------
-    # Score
+    # SCORE
     # --------------------------------------------------------
 
     skin_area = np.sum(
         skin_mask > 0
     )
 
-    pigmentation_area = np.sum(
+    affected_area = np.sum(
         pigmentation_mask > 80
     )
 
     ratio = (
-        pigmentation_area
+        affected_area
         /
         max(skin_area, 1)
         * 100
     )
 
+    # Much more conservative scoring.
     score = np.interp(
         ratio,
-        [1, 15],
-        [5, 95]
+        [0.2, 5],
+        [5, 85]
     )
 
     score = float(
@@ -805,56 +890,87 @@ def _analyze_pigmentation(image_bytes: bytes):
     )
 
     # --------------------------------------------------------
-    # Create overlay on the face crop
+    # CREATE NATURAL-LOOKING OVERLAY
     # --------------------------------------------------------
 
-    overlay = face_resized.copy()
-
-    pigment_color = np.zeros_like(
+    purple = np.zeros_like(
         face_resized
     )
 
-    # BGR purple.
-    pigment_color[:, :] = (
-        180,
-        80,
-        220
+    purple[:, :] = (
+        175,
+        85,
+        210
     )
 
+    # Very subtle blend.
     blended = cv2.addWeighted(
         face_resized,
-        0.72,
-        pigment_color,
-        0.28,
+        0.84,
+        purple,
+        0.16,
         0
     )
 
-    mask_3d = cv2.cvtColor(
-        pigmentation_mask,
-        cv2.COLOR_GRAY2BGR
+    mask_soft = (
+        pigmentation_mask.astype(
+            np.float32
+        )
+        / 255.0
     )
 
-    highlighted = np.where(
-        mask_3d > 40,
-        blended,
-        face_resized
+    mask_soft = (
+        mask_soft
+        * 0.70
     )
+
+    mask_soft = mask_soft[
+        :,
+        :,
+        None
+    ]
+
+    highlighted = (
+        face_resized.astype(
+            np.float32
+        )
+        * (1.0 - mask_soft)
+        +
+        blended.astype(
+            np.float32
+        )
+        * mask_soft
+    )
+
+    highlighted = np.clip(
+        highlighted,
+        0,
+        255
+    ).astype(np.uint8)
 
     # --------------------------------------------------------
-    # Put overlay back onto original image
+    # Put result back into original image
     # --------------------------------------------------------
 
     x1, y1, x2, y2 = face_box
 
-    face_width = x2 - x1
-    face_height = y2 - y1
+    face_width = max(
+        x2 - x1,
+        1
+    )
 
-    highlighted_original_size = cv2.resize(
+    face_height = max(
+        y2 - y1,
+        1
+    )
+
+    highlighted_original = cv2.resize(
         highlighted,
         (
             face_width,
             face_height
-        )
+        ),
+        interpolation=cv2.INTER_LINEAR
     )
 
     result = original.copy()
@@ -862,7 +978,11 @@ def _analyze_pigmentation(image_bytes: bytes):
     result[
         y1:y2,
         x1:x2
-    ] = highlighted_original_size
+    ] = highlighted_original
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
 
     output_path = (
         "app/static/pigmentation_result.jpg"
@@ -870,7 +990,11 @@ def _analyze_pigmentation(image_bytes: bytes):
 
     cv2.imwrite(
         output_path,
-        result
+        result,
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            95
+        ]
     )
 
     return {
@@ -1651,35 +1775,30 @@ def analyze_skin(
 
     visual_issues = []
 
-
-    if visual["uneven_tone"] >= 55:
-
+    if uneven_tone["score"] >= 55:
         visual_issues.append(
-            "Uneven Skin Tone"
-        )
+        "Uneven Skin Tone"
+    )
 
-
-    if visual["pigmentation"] >= 55:
-
+    if pigmentation["score"] >= 55:
         visual_issues.append(
-            "Pigmentation"
-        )
-
+        "Pigmentation"
+    )
 
     if visual["dark_spots"] >= 55:
-
         visual_issues.append(
-            "Dark Spots"
-        )
-
+        "Dark Spots"
+    )
 
     if visual["redness"] >= 60:
+       visual_issues.append(
+        "Redness"
+    )
 
+    if dark_circles["overall"] >= 55:
         visual_issues.append(
-            "Redness"
-        )
-
-
+        "Dark Circles"
+    )
     # --------------------------------------------------------
     # Combine issues
     # --------------------------------------------------------
@@ -1777,22 +1896,22 @@ def analyze_skin(
 
         "skin_metrics": {
 
-            "uneven_tone": visual[
-                "uneven_tone"
-            ],
+        "uneven_tone": uneven_tone[
+        "score"
+    ],
 
-            "pigmentation": visual[
-                "pigmentation"
-            ],
+        "pigmentation": pigmentation[
+        "score"
+    ],
 
-            "dark_spots": visual[
-                "dark_spots"
-            ],
+        "dark_spots": visual[
+        "dark_spots"
+    ],
 
-            "redness": visual[
-                "redness"
-            ]
-        },
+        "redness": visual[
+        "redness"
+    ]
+},
         "dark_circles": dark_circles,
         "pigmentation": pigmentation,
         "uneven_tone": uneven_tone,
