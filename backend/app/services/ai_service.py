@@ -1254,16 +1254,12 @@ def _build_combined_skin_overlay(
     detections
 ):
     """
-    Create a clean, premium facial-analysis visualization.
+    Create one clean facial-analysis image containing:
 
-    The original face remains visible.
-    Only localized regions are softly highlighted.
-
-    Colors:
-        Red    = acne detections
-        Purple = pigmentation
-        Yellow = uneven skin tone
-        Blue   = dark circles
+    - Acne / YOLO detections
+    - Pigmentation regions
+    - Uneven skin-tone regions
+    - Soft oval dark-circle regions
 
     This is a visual computer-vision estimate and is not
     a medical diagnosis.
@@ -1284,58 +1280,7 @@ def _build_combined_skin_overlay(
     result = original.copy()
 
     # ========================================================
-    # 1. ACNE / YOLO BOXES
-    # ========================================================
-
-    for detection in detections:
-
-        bbox = detection.get("bbox")
-
-        if not bbox:
-            continue
-
-        x1 = int(bbox["x"])
-        y1 = int(bbox["y"])
-        x2 = x1 + int(bbox["width"])
-        y2 = y1 + int(bbox["height"])
-
-        issue = str(
-            detection.get("issue", "")
-        ).lower()
-
-        if issue == "blackheads":
-            color = (0, 165, 255)
-
-        elif issue == "dark spot":
-            color = (255, 0, 255)
-
-        elif issue == "nodules":
-            color = (0, 0, 255)
-
-        elif issue == "papules":
-            color = (255, 80, 80)
-
-        elif issue == "pustules":
-            color = (0, 0, 255)
-
-        elif issue == "whiteheads":
-            color = (255, 165, 0)
-
-        else:
-            color = (0, 255, 0)
-
-        # Thin premium-looking box
-        cv2.rectangle(
-            result,
-            (x1, y1),
-            (x2, y2),
-            color,
-            2,
-            cv2.LINE_AA
-        )
-
-    # ========================================================
-    # 2. FACE ANALYSIS IMAGE
+    # FACE CROP
     # ========================================================
 
     x1, y1, x2, y2 = face_box
@@ -1356,6 +1301,10 @@ def _build_combined_skin_overlay(
         interpolation=cv2.INTER_AREA
     )
 
+    # ========================================================
+    # COLOR SPACES
+    # ========================================================
+
     lab = cv2.cvtColor(
         face_resized,
         cv2.COLOR_BGR2LAB
@@ -1371,7 +1320,7 @@ def _build_combined_skin_overlay(
     Y, Cr, Cb = cv2.split(ycrcb)
 
     # ========================================================
-    # 3. SKIN MASK
+    # SKIN MASK
     # ========================================================
 
     skin_mask = (
@@ -1382,33 +1331,34 @@ def _build_combined_skin_overlay(
         (L > 35)
     ).astype(np.uint8) * 255
 
-    kernel = np.ones(
-        (5, 5),
-        np.uint8
-    )
-
     skin_mask = cv2.morphologyEx(
         skin_mask,
         cv2.MORPH_OPEN,
-        kernel
+        np.ones((5, 5), np.uint8)
     )
 
     skin_mask = cv2.morphologyEx(
         skin_mask,
         cv2.MORPH_CLOSE,
-        kernel
+        np.ones((7, 7), np.uint8)
+    )
+
+    # Keep away from face edges.
+    skin_mask = cv2.erode(
+        skin_mask,
+        np.ones((11, 11), np.uint8),
+        iterations=1
     )
 
     # ========================================================
-    # HELPER: KEEP ONLY MEANINGFUL REGIONS
+    # HELPER FOR LOCALIZED REGIONS
     # ========================================================
 
     def clean_regions(
         mask,
-        min_area=120,
-        max_area=12000
+        min_area,
+        max_area
     ):
-
         binary = (
             mask > 0
         ).astype(np.uint8)
@@ -1435,7 +1385,6 @@ def _build_combined_skin_overlay(
                 area >= min_area
                 and area <= max_area
             ):
-
                 cleaned[
                     labels == i
                 ] = 255
@@ -1443,7 +1392,7 @@ def _build_combined_skin_overlay(
         return cleaned
 
     # ========================================================
-    # 4. PIGMENTATION
+    # PIGMENTATION
     # ========================================================
 
     skin_pixels = L[
@@ -1457,19 +1406,21 @@ def _build_combined_skin_overlay(
 
     if len(skin_pixels) >= 500:
 
-        median_l = float(
-            np.median(
-                skin_pixels
-            )
+        local_average = cv2.GaussianBlur(
+            L.astype(np.float32),
+            (41, 41),
+            0
         )
 
-        # Stronger threshold than before.
-        # This prevents normal facial shading from
-        # being interpreted as pigmentation.
+        local_darkness = (
+            local_average
+            -
+            L.astype(np.float32)
+        )
 
         raw_pigmentation = (
             (skin_mask > 0) &
-            (L < median_l - 25)
+            (local_darkness > 15)
         ).astype(np.uint8) * 255
 
         raw_pigmentation = cv2.morphologyEx(
@@ -1486,37 +1437,30 @@ def _build_combined_skin_overlay(
 
         pigmentation_mask = clean_regions(
             raw_pigmentation,
-            min_area=150,
-            max_area=10000
+            min_area=80,
+            max_area=2500
         )
 
         pigmentation_mask = cv2.GaussianBlur(
             pigmentation_mask,
-            (13, 13),
+            (11, 11),
             0
         )
 
     # ========================================================
-    # 5. UNEVEN SKIN TONE
+    # UNEVEN SKIN TONE
     # ========================================================
 
-    L_float = L.astype(
-        np.float32
-    )
-
     local_average = cv2.GaussianBlur(
-        L_float,
+        L.astype(np.float32),
         (41, 41),
         0
     )
 
     local_difference = cv2.absdiff(
-        L_float,
+        L.astype(np.float32),
         local_average
     )
-
-    # Higher threshold so subtle lighting changes do not
-    # cover the whole face.
 
     raw_uneven = (
         (skin_mask > 0) &
@@ -1537,18 +1481,18 @@ def _build_combined_skin_overlay(
 
     uneven_mask = clean_regions(
         raw_uneven,
-        min_area=180,
-        max_area=9000
+        min_area=100,
+        max_area=2200
     )
 
     uneven_mask = cv2.GaussianBlur(
         uneven_mask,
-        (15, 15),
+        (13, 13),
         0
     )
 
     # ========================================================
-    # 6. MAP FACE MASKS BACK TO ORIGINAL IMAGE
+    # MAP FACE MASKS TO ORIGINAL IMAGE
     # ========================================================
 
     pigment_original = cv2.resize(
@@ -1590,27 +1534,23 @@ def _build_combined_skin_overlay(
     ] = uneven_original
 
     # ========================================================
-    # 7. SOFT COLOR APPLICATION
+    # OVERLAY HELPER
     # ========================================================
 
     def apply_soft_overlay(
         base,
         mask,
         color,
-        max_alpha
+        alpha_strength
     ):
 
         alpha = (
             mask.astype(np.float32)
             / 255.0
-            * max_alpha
+            * alpha_strength
         )
 
-        alpha = alpha[
-            :,
-            :,
-            None
-        ]
+        alpha = alpha[:, :, None]
 
         color_layer = np.zeros_like(
             base
@@ -1632,26 +1572,30 @@ def _build_combined_skin_overlay(
             255
         ).astype(np.uint8)
 
-    # Purple pigmentation:
-    # very subtle.
+    # ========================================================
+    # APPLY PIGMENTATION
+    # ========================================================
+
     result = apply_soft_overlay(
         result,
         full_pigment,
-        (170, 80, 210),
-        0.18
+        (175, 85, 210),
+        0.16
     )
 
-    # Yellow uneven tone:
-    # even more subtle.
+    # ========================================================
+    # APPLY UNEVEN TONE
+    # ========================================================
+
     result = apply_soft_overlay(
         result,
         full_uneven,
         (40, 190, 230),
-        0.12
+        0.10
     )
 
     # ========================================================
-    # 8. DARK CIRCLES
+    # DARK CIRCLES — SOFT OVALS
     # ========================================================
 
     _, left_eye_region, right_eye_region = (
@@ -1665,28 +1609,92 @@ def _build_combined_skin_overlay(
         dtype=np.uint8
     )
 
-    if left_eye_region is not None:
+    
+    def add_under_eye_oval(
+    mask,
+    region
+):
+        if region is None:
+           return
 
-        cv2.fillPoly(
-            dark_mask,
-            [left_eye_region],
-            255
+        points = region.reshape(-1, 2)
+
+        min_x = int(np.min(points[:, 0]))
+        max_x = int(np.max(points[:, 0]))
+        min_y = int(np.min(points[:, 1]))
+        max_y = int(np.max(points[:, 1]))
+
+        eye_width = max(
+            max_x - min_x,
+            1
         )
 
-    if right_eye_region is not None:
-
-        cv2.fillPoly(
-            dark_mask,
-            [right_eye_region],
-            255
+        eye_height = max(
+            max_y - min_y,
+            1
         )
 
-    # Large blur makes it look like a soft facial
-    # analysis region rather than detection boxes.
+        # Center of the eye horizontally.
+        center_x = int(
+            (min_x + max_x) / 2
+        )
 
+        # IMPORTANT:
+        # Move the oval below the lower eyelid.
+        center_y = int(
+            max_y + eye_height * 0.15
+        )
+
+        # Horizontal oval.
+        oval_width = int(
+            eye_width * 0.75
+        )
+
+        oval_height = int(
+            eye_height * 0.40
+        )
+
+        oval_width = max(
+            oval_width,
+            30
+        )
+
+        oval_height = max(
+            oval_height,
+            10
+        )
+
+        cv2.ellipse(
+            mask,
+            (
+                center_x,
+                center_y
+            ),
+            (
+                oval_width // 2,
+                oval_height // 2
+            ),
+            0,
+            0,
+            360,
+            255,
+            -1
+        )
+
+    add_under_eye_oval(
+        dark_mask,
+        left_eye_region
+    )
+
+    add_under_eye_oval(
+        dark_mask,
+        right_eye_region
+    )
+
+    # Very soft oval edges.
     dark_mask = cv2.GaussianBlur(
         dark_mask,
-        (25, 25),
+        (31, 31),
         0
     )
 
@@ -1694,11 +1702,87 @@ def _build_combined_skin_overlay(
         result,
         dark_mask,
         (220, 100, 40),
-        0.10
+        0.09
     )
 
     # ========================================================
-    # 9. SAVE CLEAN RESULT
+    # ACNE / YOLO BOXES — DRAW LAST
+    # ========================================================
+
+    for detection in detections:
+
+        bbox = detection.get(
+            "bbox"
+        )
+
+        if not bbox:
+            continue
+
+        box_x1 = int(
+            bbox["x"]
+        )
+
+        box_y1 = int(
+            bbox["y"]
+        )
+
+        box_x2 = (
+            box_x1
+            +
+            int(bbox["width"])
+        )
+
+        box_y2 = (
+            box_y1
+            +
+            int(bbox["height"])
+        )
+
+        issue = str(
+            detection.get(
+                "issue",
+                ""
+            )
+        ).lower()
+
+        if issue == "blackheads":
+            color = (0, 165, 255)
+
+        elif issue == "dark spot":
+            color = (255, 0, 255)
+
+        elif issue == "nodules":
+            color = (0, 0, 255)
+
+        elif issue == "papules":
+            color = (255, 80, 80)
+
+        elif issue == "pustules":
+            color = (0, 0, 255)
+
+        elif issue == "whiteheads":
+            color = (255, 165, 0)
+
+        else:
+            color = (0, 255, 0)
+
+        cv2.rectangle(
+            result,
+            (
+                box_x1,
+                box_y1
+            ),
+            (
+                box_x2,
+                box_y2
+            ),
+            color,
+            2,
+            cv2.LINE_AA
+        )
+
+    # ========================================================
+    # SAVE
     # ========================================================
 
     output_path = (

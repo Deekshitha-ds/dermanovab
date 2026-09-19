@@ -209,13 +209,12 @@ def extract_face(image_bytes):
 
 def get_under_eye_regions(image_bytes):
     """
-    Detect the left and right under-eye regions
-    using MediaPipe Face Mesh.
+    Detect the regions directly BELOW each eye.
 
-    Returns:
-        original image,
-        left under-eye polygon,
-        right under-eye polygon
+    The region is built from the MediaPipe lower-eyelid
+    landmarks and extended downward. This prevents the
+    dark-circle visualization from covering the eyelids
+    or the eyeballs.
     """
 
     image = cv2.imdecode(
@@ -251,40 +250,110 @@ def get_under_eye_regions(image_bytes):
         results.multi_face_landmarks[0]
     )
 
-    # MediaPipe eye landmark groups.
-    #
-    # One eye:
-    # outer 33
-    # inner 133
-    # lower contour 145 / 159
-    #
-    # Other eye:
-    # outer 362
-    # inner 263
-    # lower contour 374 / 386
+    def point(index):
+        lm = landmarks.landmark[index]
 
-    left_region = _build_under_eye_region(
-        landmarks,
-        w,
-        h,
+        x = int(lm.x * w)
+        y = int(lm.y * h)
+
+        return (
+            max(0, min(x, w - 1)),
+            max(0, min(y, h - 1))
+        )
+
+    def build_region(
+        outer_index,
+        inner_index,
+        lower_indices
+    ):
+        outer = point(
+            outer_index
+        )
+
+        inner = point(
+            inner_index
+        )
+
+        lower_points = [
+            point(index)
+            for index in lower_indices
+        ]
+
+        # Eye width controls the size of the
+        # under-eye expansion.
+        eye_width = max(
+            abs(
+                outer[0] - inner[0]
+            ),
+            1
+        )
+
+        # The lower eyelid is the TOP boundary.
+        top_boundary = [
+            outer,
+            *lower_points,
+            inner
+        ]
+
+        # Extend downward only.
+        downward_offset = int(
+            eye_width * 0.32
+        )
+
+        bottom_boundary = [
+            (
+                x,
+                min(
+                    y + downward_offset,
+                    h - 1
+                )
+            )
+            for x, y in reversed(
+                top_boundary
+            )
+        ]
+
+        polygon = np.array(
+            top_boundary + bottom_boundary,
+            dtype=np.int32
+        )
+
+        return polygon
+
+    # Image-left eye.
+    # MediaPipe's right-eye contour.
+    left_under_eye = build_region(
         outer_index=33,
         inner_index=133,
-        lower1_index=145,
-        lower2_index=159
+        lower_indices=[
+            7,
+            163,
+            144,
+            145,
+            153,
+            154,
+            155,
+        ]
     )
 
-    right_region = _build_under_eye_region(
-        landmarks,
-        w,
-        h,
+    # Image-right eye.
+    # MediaPipe's left-eye contour.
+    right_under_eye = build_region(
         outer_index=263,
         inner_index=362,
-        lower1_index=374,
-        lower2_index=386
+        lower_indices=[
+            249,
+            390,
+            373,
+            374,
+            380,
+            381,
+            382,
+        ]
     )
 
     return (
         original,
-        left_region,
-        right_region
+        left_under_eye,
+        right_under_eye
     )
