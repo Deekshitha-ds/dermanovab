@@ -16,8 +16,6 @@ These visual metrics are estimates from the image and should not be
 treated as medical diagnoses.
 """
 
-from unittest import result
-
 from app.ml.yolo_detector import detect_skin
 from app.services.recommendation_service import (
     generate_recommendations,
@@ -1781,8 +1779,8 @@ def _build_combined_skin_overlay(
         0.14
     )
 
-   # ========================================================
-    # ACNE / YOLO CIRCLES + LABELS
+    # ========================================================
+    # PREMIUM YOLO DETECTION MARKERS
     # ========================================================
 
     for detection in detections:
@@ -1791,6 +1789,10 @@ def _build_combined_skin_overlay(
 
         if not bbox:
             continue
+
+        # ----------------------------------------------------
+        # Bounding box coordinates
+        # ----------------------------------------------------
 
         box_x1 = int(bbox["x"])
         box_y1 = int(bbox["y"])
@@ -1805,64 +1807,125 @@ def _build_combined_skin_overlay(
             int(bbox["height"])
         )
 
+        # ----------------------------------------------------
+        # Detection type
+        # ----------------------------------------------------
+
         issue = str(
-            detection.get("issue", "")
-        ).strip()
-
-        issue_lower = issue.lower()
+            detection.get(
+                "issue",
+                ""
+            )
+        ).lower()
 
         # ----------------------------------------------------
-        # Find center and radius
+        # Clean display names
         # ----------------------------------------------------
 
-        center_x = int(
-            (box_x1 + box_x2) / 2
+        display_names = {
+
+            "nodules": "Nodule",
+
+            "papules": "Papule",
+
+            "pustules": "Pustule",
+
+            "blackheads": "Blackhead",
+
+            "whiteheads": "Whitehead",
+
+            "dark spot": "Dark Spot"
+
+        }
+
+        display_name = display_names.get(
+            issue,
+            issue.title()
         )
 
-        center_y = int(
-            (box_y1 + box_y2) / 2
-        )
+        # ----------------------------------------------------
+        # Premium marker colors
+        # OpenCV uses BGR
+        # ----------------------------------------------------
+
+        if issue in [
+            "nodules",
+            "papules",
+            "pustules"
+        ]:
+
+            # Refined coral red
+            color = (
+                80,
+                75,
+                215
+            )
+
+        elif issue == "dark spot":
+
+            # Refined blue
+            color = (
+                210,
+                115,
+                45
+            )
+
+        elif issue == "blackheads":
+
+            color = (
+                30,
+                150,
+                210
+            )
+
+        elif issue == "whiteheads":
+
+            color = (
+                190,
+                95,
+                175
+            )
+
+        else:
+
+            color = (
+                150,
+                150,
+                150
+            )
+
+        # ----------------------------------------------------
+        # Detection center
+        # ----------------------------------------------------
+
+        center_x = (
+            box_x1 +
+            box_x2
+        ) // 2
+
+        center_y = (
+            box_y1 +
+            box_y2
+        ) // 2
+
+        # ----------------------------------------------------
+        # Tight circle
+        # ----------------------------------------------------
 
         width = box_x2 - box_x1
         height = box_y2 - box_y1
 
         radius = int(
-            max(width, height) / 2
+            min(width, height) * 0.45
         )
 
-        radius = max(radius, 8)
+        radius = max(
+            radius,
+            7
+        )
 
         # ----------------------------------------------------
-        # Colors
-        # OpenCV uses BGR
-        # ----------------------------------------------------
-
-        if issue_lower in [
-            "papules",
-            "pustules",
-            "nodules"
-        ]:
-            # RED — pimples / acne
-            color = (0, 0, 255)
-
-        elif issue_lower == "dark spot":
-            # BLUE — pigmentation / dark spot
-            color = (255, 0, 0)
-
-        elif issue_lower == "blackheads":
-            # ORANGE
-            color = (0, 165, 255)
-
-        elif issue_lower == "whiteheads":
-            # PURPLE
-            color = (255, 0, 255)
-
-        else:
-            # Default
-            color = (0, 255, 0)
-
-        # ----------------------------------------------------
-        # Draw circle
+        # Thin elegant circle
         # ----------------------------------------------------
 
         cv2.circle(
@@ -1877,73 +1940,103 @@ def _build_combined_skin_overlay(
             cv2.LINE_AA
         )
 
+        # ====================================================
+        # MINIMAL TEXT
+        # ====================================================
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        font_scale = 0.42
+
+        thickness = 1
+
+        (
+            text_width,
+            text_height
+        ), baseline = cv2.getTextSize(
+            display_name,
+            font,
+            font_scale,
+            thickness
+        )
+
         # ----------------------------------------------------
-        # Draw label
+        # Position text above marker
         # ----------------------------------------------------
 
-        if issue:
+        text_x = int(
+            center_x -
+            text_width / 2
+        )
 
-            label = issue
+        text_y = int(
+            center_y -
+            radius -
+            9
+        )
 
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.50
-            thickness = 1
+        # ----------------------------------------------------
+        # Keep text inside image
+        # ----------------------------------------------------
 
+        text_x = max(
+            8,
+            min(
+                text_x,
+                result.shape[1] -
+                text_width -
+                8
+            )
+        )
+
+        text_y = max(
+            text_height + 8,
+            text_y
+        )
+
+        # ----------------------------------------------------
+        # Very subtle shadow
+        # ----------------------------------------------------
+
+        cv2.putText(
+            result,
+            display_name,
             (
-                text_width,
-                text_height
-            ), baseline = cv2.getTextSize(
-                label,
-                font,
-                font_scale,
-                thickness
-            )
+                text_x + 1,
+                text_y + 1
+            ),
+            font,
+            font_scale,
+            (
+                25,
+                25,
+                25
+            ),
+            2,
+            cv2.LINE_AA
+        )
 
-            label_x = center_x - int(
-                text_width / 2
-            )
+        # ----------------------------------------------------
+        # Clean white text
+        # ----------------------------------------------------
 
-            label_y = center_y - radius - 8
-
-            # Keep label inside image
-            if label_y - text_height < 0:
-                label_y = center_y + radius + text_height + 8
-
-            # ------------------------------------------------
-            # Label background
-            # ------------------------------------------------
-
-            cv2.rectangle(
-                result,
-                (
-                    label_x - 4,
-                    label_y - text_height - baseline - 3
-                ),
-                (
-                    label_x + text_width + 4,
-                    label_y + 3
-                ),
-                color,
-                -1
-            )
-
-            # ------------------------------------------------
-            # Label text
-            # ------------------------------------------------
-
-            cv2.putText(
-                result,
-                label,
-                (
-                    label_x,
-                    label_y
-                ),
-                font,
-                font_scale,
-                (255, 255, 255),
-                thickness,
-                cv2.LINE_AA
-            )
+        cv2.putText(
+            result,
+            display_name,
+            (
+                text_x,
+                text_y
+            ),
+            font,
+            font_scale,
+            (
+                255,
+                255,
+                255
+            ),
+            thickness,
+            cv2.LINE_AA
+        )
 
     # ========================================================
     # SAVE
@@ -1970,7 +2063,8 @@ def _build_combined_skin_overlay(
 # ============================================================
 
 def analyze_skin(
-    image_bytes: bytes
+    image_bytes: bytes,
+    mode: str = "upload"
 ):
 
     # --------------------------------------------------------
@@ -1978,8 +2072,10 @@ def analyze_skin(
     # --------------------------------------------------------
 
     detections, output_path = detect_skin(
-        image_bytes
-    )
+    image_bytes,
+    mode=mode
+)
+    
     combined_overlay = _build_combined_skin_overlay(
     image_bytes,
     detections

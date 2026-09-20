@@ -1,9 +1,6 @@
 import os
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
 
-load_dotenv()
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
@@ -14,16 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.orm_models import User
 
-mail_conf = ConnectionConfig(
-    MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
-    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-    MAIL_FROM=os.getenv("MAIL_FROM"),
-    MAIL_SERVER=os.getenv("MAIL_SERVER"),
-    MAIL_PORT=int(os.getenv("MAIL_PORT", 587)),
-    MAIL_STARTTLS=os.getenv("MAIL_STARTTLS", "true").lower() == "true",
-    MAIL_SSL_TLS=os.getenv("MAIL_SSL_TLS", "false").lower() == "true",
-    USE_CREDENTIALS=True,
-)
+
 
 SECRET_KEY = os.getenv("DERMASENSE_JWT_SECRET", "change-this-secret-in-production")
 ALGORITHM = "HS256"
@@ -74,28 +62,3 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
         raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
 
-async def send_verification_email(email: str, code: str):
-    message = MessageSchema(
-        subject="Verify your DermaNova AI account",
-        recipients=[email],
-        body=f"""
-Hello,
-
-Thank you for registering with DermaNova AI.
-
-Your email verification code is:
-
-{code}
-
-This code will expire in 10 minutes.
-
-If you did not create this account, you can ignore this email.
-
-Regards,
-DermaNova AI Team
-""",
-        subtype="plain",
-    )
-
-    fm = FastMail(mail_conf)
-    await fm.send_message(message)
