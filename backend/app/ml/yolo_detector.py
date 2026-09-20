@@ -45,7 +45,7 @@ def detect_skin(image_bytes: bytes):
 
     yolo_input = cv2.resize(
         face,
-        (640, 640)
+        (1024, 1024)
     )
 
     cv2.imwrite(
@@ -59,13 +59,23 @@ def detect_skin(image_bytes: bytes):
 
     results = model(
         yolo_input,
-        imgsz=640,
-        conf=0.25,
+        imgsz=1024,
+        conf=0.10,
         verbose=True
     )
 
     print(results[0])
     print("Boxes:", len(results[0].boxes))
+    for box in results[0].boxes:
+        print(
+            "DETECTION:",
+            model.names[int(box.cls[0])],
+            "confidence=",
+            float(box.conf[0]),
+            "box=",
+            box.xyxy[0].tolist()
+        )
+
 
     detections = []
 
@@ -73,8 +83,10 @@ def detect_skin(image_bytes: bytes):
     # Scale YOLO coordinates back to original face
     # --------------------------------------------------------
 
-    scale_x = face_w / 640
-    scale_y = face_h / 640
+    scale_x = face_w / 1024
+    scale_y = face_h / 1024
+
+
 
     # --------------------------------------------------------
     # Process detections

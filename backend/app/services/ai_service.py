@@ -16,6 +16,8 @@ These visual metrics are estimates from the image and should not be
 treated as medical diagnoses.
 """
 
+from unittest import result
+
 from app.ml.yolo_detector import detect_skin
 from app.services.recommendation_service import (
     generate_recommendations,
@@ -482,6 +484,7 @@ def _calculate_health(
         )),
         1
     )
+
 def _analyze_dark_circles(image_bytes):
     """
     Estimate dark-circle intensity specifically in the
@@ -1343,7 +1346,6 @@ def _build_combined_skin_overlay(
         np.ones((7, 7), np.uint8)
     )
 
-    # Keep away from face edges.
     skin_mask = cv2.erode(
         skin_mask,
         np.ones((11, 11), np.uint8),
@@ -1351,7 +1353,7 @@ def _build_combined_skin_overlay(
     )
 
     # ========================================================
-    # HELPER FOR LOCALIZED REGIONS
+    # HELPER
     # ========================================================
 
     def clean_regions(
@@ -1359,6 +1361,7 @@ def _build_combined_skin_overlay(
         min_area,
         max_area
     ):
+
         binary = (
             mask > 0
         ).astype(np.uint8)
@@ -1385,6 +1388,7 @@ def _build_combined_skin_overlay(
                 area >= min_area
                 and area <= max_area
             ):
+
                 cleaned[
                     labels == i
                 ] = 255
@@ -1413,8 +1417,7 @@ def _build_combined_skin_overlay(
         )
 
         local_darkness = (
-            local_average
-            -
+            local_average -
             L.astype(np.float32)
         )
 
@@ -1451,14 +1454,18 @@ def _build_combined_skin_overlay(
     # UNEVEN SKIN TONE
     # ========================================================
 
+    L_float = L.astype(
+        np.float32
+    )
+
     local_average = cv2.GaussianBlur(
-        L.astype(np.float32),
+        L_float,
         (41, 41),
         0
     )
 
     local_difference = cv2.absdiff(
-        L.astype(np.float32),
+        L_float,
         local_average
     )
 
@@ -1573,7 +1580,7 @@ def _build_combined_skin_overlay(
         ).astype(np.uint8)
 
     # ========================================================
-    # APPLY PIGMENTATION
+    # PIGMENTATION
     # ========================================================
 
     result = apply_soft_overlay(
@@ -1584,7 +1591,7 @@ def _build_combined_skin_overlay(
     )
 
     # ========================================================
-    # APPLY UNEVEN TONE
+    # UNEVEN TONE
     # ========================================================
 
     result = apply_soft_overlay(
@@ -1593,9 +1600,8 @@ def _build_combined_skin_overlay(
         (40, 190, 230),
         0.10
     )
-
     # ========================================================
-    # DARK CIRCLES — SOFT OVALS
+    # DARK CIRCLES — CURVED UNDER-EYE SHAPES
     # ========================================================
 
     _, left_eye_region, right_eye_region = (
@@ -1609,20 +1615,44 @@ def _build_combined_skin_overlay(
         dtype=np.uint8
     )
 
-    
-    def add_under_eye_oval(
-    mask,
-    region
-):
+
+    def add_under_eye_shape(
+        mask,
+        region
+    ):
+        """
+        Create a soft, slightly rotated under-eye oval.
+
+        The oval is positioned from the center of the
+        under-eye region and kept close to the lower eyelid.
+        """
+
         if region is None:
-           return
+            return
 
-        points = region.reshape(-1, 2)
+        points = region.reshape(
+            -1,
+            2
+        ).astype(np.float32)
 
-        min_x = int(np.min(points[:, 0]))
-        max_x = int(np.max(points[:, 0]))
-        min_y = int(np.min(points[:, 1]))
-        max_y = int(np.max(points[:, 1]))
+        if len(points) < 4:
+            return
+
+        min_x = float(
+            np.min(points[:, 0])
+        )
+
+        max_x = float(
+            np.max(points[:, 0])
+        )
+
+        min_y = float(
+            np.min(points[:, 1])
+        )
+
+        max_y = float(
+            np.max(points[:, 1])
+        )
 
         eye_width = max(
             max_x - min_x,
@@ -1634,152 +1664,286 @@ def _build_combined_skin_overlay(
             1
         )
 
-        # Center of the eye horizontally.
-        center_x = int(
-            (min_x + max_x) / 2
-        )
+        # --------------------------------------------------------
+        # Horizontal center
+        # --------------------------------------------------------
 
+        center_x = (
+            min_x + max_x
+        ) / 2
+
+        # --------------------------------------------------------
         # IMPORTANT:
-        # Move the oval below the lower eyelid.
-        center_y = int(
-            max_y + eye_height * 0.15
+        # Put the center around the lower eyelid,
+        # not at the bottom of the whole region.
+        # --------------------------------------------------------
+
+        center_y = (
+            min_y
+            + eye_height * 0.48
         )
 
-        # Horizontal oval.
-        oval_width = int(
-            eye_width * 0.75
-        )
-
-        oval_height = int(
-            eye_height * 0.40
-        )
+        # --------------------------------------------------------
+        # Wide, shallow shape similar to the reference image.
+        # --------------------------------------------------------
 
         oval_width = max(
-            oval_width,
-            30
+            eye_width * 0.78,
+            35
         )
 
         oval_height = max(
-            oval_height,
-            10
+            eye_width * 0.17,
+            12
         )
+
+        # --------------------------------------------------------
+        # Estimate slight eye angle.
+        # --------------------------------------------------------
+
+        # Use left-most and right-most points to estimate
+        # the direction of the eye.
+        sorted_points = points[
+            np.argsort(points[:, 0])
+        ]
+
+        left_point = sorted_points[0]
+        right_point = sorted_points[-1]
+
+        angle = np.degrees(
+            np.arctan2(
+                right_point[1] - left_point[1],
+                right_point[0] - left_point[0]
+            )
+        )
+
+        # Limit rotation so the indicator remains elegant.
+        angle = float(
+            np.clip(
+                angle,
+                -12,
+                12
+            )
+        )
+
+        # --------------------------------------------------------
+        # Draw rotated ellipse.
+        # --------------------------------------------------------
 
         cv2.ellipse(
             mask,
             (
-                center_x,
-                center_y
+                int(center_x),
+                int(center_y)
             ),
             (
-                oval_width // 2,
-                oval_height // 2
+                int(oval_width / 2),
+                int(oval_height / 2)
             ),
-            0,
+            angle,
             0,
             360,
             255,
             -1
         )
 
-    add_under_eye_oval(
+
+    # Left under-eye
+    add_under_eye_shape(
         dark_mask,
         left_eye_region
     )
 
-    add_under_eye_oval(
+    # Right under-eye
+    add_under_eye_shape(
         dark_mask,
         right_eye_region
     )
 
-    # Very soft oval edges.
+    # --------------------------------------------------------
+    # Soft feathered edges.
+    # --------------------------------------------------------
+
     dark_mask = cv2.GaussianBlur(
         dark_mask,
         (31, 31),
         0
     )
 
+    # --------------------------------------------------------
+    # Apply subtle blue/orange visualization.
+    # --------------------------------------------------------
+
     result = apply_soft_overlay(
         result,
         dark_mask,
         (220, 100, 40),
-        0.09
+        0.14
     )
 
-    # ========================================================
-    # ACNE / YOLO BOXES — DRAW LAST
+   # ========================================================
+    # ACNE / YOLO CIRCLES + LABELS
     # ========================================================
 
     for detection in detections:
 
-        bbox = detection.get(
-            "bbox"
-        )
+        bbox = detection.get("bbox")
 
         if not bbox:
             continue
 
-        box_x1 = int(
-            bbox["x"]
-        )
-
-        box_y1 = int(
-            bbox["y"]
-        )
+        box_x1 = int(bbox["x"])
+        box_y1 = int(bbox["y"])
 
         box_x2 = (
-            box_x1
-            +
+            box_x1 +
             int(bbox["width"])
         )
 
         box_y2 = (
-            box_y1
-            +
+            box_y1 +
             int(bbox["height"])
         )
 
         issue = str(
-            detection.get(
-                "issue",
-                ""
-            )
-        ).lower()
+            detection.get("issue", "")
+        ).strip()
 
-        if issue == "blackheads":
+        issue_lower = issue.lower()
+
+        # ----------------------------------------------------
+        # Find center and radius
+        # ----------------------------------------------------
+
+        center_x = int(
+            (box_x1 + box_x2) / 2
+        )
+
+        center_y = int(
+            (box_y1 + box_y2) / 2
+        )
+
+        width = box_x2 - box_x1
+        height = box_y2 - box_y1
+
+        radius = int(
+            max(width, height) / 2
+        )
+
+        radius = max(radius, 8)
+
+        # ----------------------------------------------------
+        # Colors
+        # OpenCV uses BGR
+        # ----------------------------------------------------
+
+        if issue_lower in [
+            "papules",
+            "pustules",
+            "nodules"
+        ]:
+            # RED — pimples / acne
+            color = (0, 0, 255)
+
+        elif issue_lower == "dark spot":
+            # BLUE — pigmentation / dark spot
+            color = (255, 0, 0)
+
+        elif issue_lower == "blackheads":
+            # ORANGE
             color = (0, 165, 255)
 
-        elif issue == "dark spot":
+        elif issue_lower == "whiteheads":
+            # PURPLE
             color = (255, 0, 255)
 
-        elif issue == "nodules":
-            color = (0, 0, 255)
-
-        elif issue == "papules":
-            color = (255, 80, 80)
-
-        elif issue == "pustules":
-            color = (0, 0, 255)
-
-        elif issue == "whiteheads":
-            color = (255, 165, 0)
-
         else:
+            # Default
             color = (0, 255, 0)
 
-        cv2.rectangle(
+        # ----------------------------------------------------
+        # Draw circle
+        # ----------------------------------------------------
+
+        cv2.circle(
             result,
             (
-                box_x1,
-                box_y1
+                center_x,
+                center_y
             ),
-            (
-                box_x2,
-                box_y2
-            ),
+            radius,
             color,
             2,
             cv2.LINE_AA
         )
+
+        # ----------------------------------------------------
+        # Draw label
+        # ----------------------------------------------------
+
+        if issue:
+
+            label = issue
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.50
+            thickness = 1
+
+            (
+                text_width,
+                text_height
+            ), baseline = cv2.getTextSize(
+                label,
+                font,
+                font_scale,
+                thickness
+            )
+
+            label_x = center_x - int(
+                text_width / 2
+            )
+
+            label_y = center_y - radius - 8
+
+            # Keep label inside image
+            if label_y - text_height < 0:
+                label_y = center_y + radius + text_height + 8
+
+            # ------------------------------------------------
+            # Label background
+            # ------------------------------------------------
+
+            cv2.rectangle(
+                result,
+                (
+                    label_x - 4,
+                    label_y - text_height - baseline - 3
+                ),
+                (
+                    label_x + text_width + 4,
+                    label_y + 3
+                ),
+                color,
+                -1
+            )
+
+            # ------------------------------------------------
+            # Label text
+            # ------------------------------------------------
+
+            cv2.putText(
+                result,
+                label,
+                (
+                    label_x,
+                    label_y
+                ),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA
+            )
 
     # ========================================================
     # SAVE
