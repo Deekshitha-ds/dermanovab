@@ -209,12 +209,12 @@ def extract_face(image_bytes):
 
 def get_under_eye_regions(image_bytes):
     """
-    Detect the regions directly BELOW each eye.
+    Detect the lower-eyelid curves for both eyes.
 
-    The region is built from the MediaPipe lower-eyelid
-    landmarks and extended downward. This prevents the
-    dark-circle visualization from covering the eyelids
-    or the eyeballs.
+    Returns:
+        original image,
+        left under-eye landmark curve,
+        right under-eye landmark curve
     """
 
     image = cv2.imdecode(
@@ -230,7 +230,7 @@ def get_under_eye_regions(image_bytes):
 
     original = image.copy()
 
-    h, w, _ = image.shape
+    h, w = image.shape[:2]
 
     rgb = cv2.cvtColor(
         image,
@@ -246,9 +246,7 @@ def get_under_eye_regions(image_bytes):
             None
         )
 
-    landmarks = (
-        results.multi_face_landmarks[0]
-    )
+    landmarks = results.multi_face_landmarks[0]
 
     def point(index):
         lm = landmarks.landmark[index]
@@ -256,104 +254,62 @@ def get_under_eye_regions(image_bytes):
         x = int(lm.x * w)
         y = int(lm.y * h)
 
-        return (
-            max(0, min(x, w - 1)),
-            max(0, min(y, h - 1))
+        x = max(
+            0,
+            min(x, w - 1)
         )
 
-    def build_region(
-        outer_index,
-        inner_index,
-        lower_indices
-    ):
-        outer = point(
-            outer_index
+        y = max(
+            0,
+            min(y, h - 1)
         )
 
-        inner = point(
-            inner_index
-        )
+        return [x, y]
 
-        lower_points = [
-            point(index)
-            for index in lower_indices
-        ]
+    # --------------------------------------------------------
+    # LOWER EYELID CURVES
+    # --------------------------------------------------------
+    #
+    # These are lower-eye landmarks, not the complete eye box.
+    #
 
-        # Eye width controls the size of the
-        # under-eye expansion.
-        eye_width = max(
-            abs(
-                outer[0] - inner[0]
-            ),
-            1
-        )
+    left_curve_indices = [
+        33,
+        144,
+        145,
+        153,
+        154,
+        155,
+        133
+    ]
 
-        # The lower eyelid is the TOP boundary.
-        top_boundary = [
-            outer,
-            *lower_points,
-            inner
-        ]
+    right_curve_indices = [
+        263,
+        374,
+        380,
+        381,
+        382,
+        362
+    ]
 
-        # Extend downward only.
-        downward_offset = int(
-            eye_width * 0.32
-        )
-
-        bottom_boundary = [
-            (
-                x,
-                min(
-                    y + downward_offset,
-                    h - 1
-                )
-            )
-            for x, y in reversed(
-                top_boundary
-            )
-        ]
-
-        polygon = np.array(
-            top_boundary + bottom_boundary,
-            dtype=np.int32
-        )
-
-        return polygon
-
-    # Image-left eye.
-    # MediaPipe's right-eye contour.
-    left_under_eye = build_region(
-        outer_index=33,
-        inner_index=133,
-        lower_indices=[
-            7,
-            163,
-            144,
-            145,
-            153,
-            154,
-            155,
-        ]
+    left_curve = np.array(
+        [
+            point(i)
+            for i in left_curve_indices
+        ],
+        dtype=np.int32
     )
 
-    # Image-right eye.
-    # MediaPipe's left-eye contour.
-    right_under_eye = build_region(
-        outer_index=263,
-        inner_index=362,
-        lower_indices=[
-            249,
-            390,
-            373,
-            374,
-            380,
-            381,
-            382,
-        ]
+    right_curve = np.array(
+        [
+            point(i)
+            for i in right_curve_indices
+        ],
+        dtype=np.int32
     )
 
     return (
         original,
-        left_under_eye,
-        right_under_eye
+        left_curve,
+        right_curve
     )

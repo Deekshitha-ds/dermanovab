@@ -482,20 +482,221 @@ def _calculate_health(
         )),
         1
     )
-
-def _analyze_dark_circles(image_bytes):
+def _draw_dark_circle_crescent(
+    mask,
+    curve
+):
     """
-    Estimate dark-circle intensity specifically in the
-    under-eye regions detected by MediaPipe Face Mesh.
+    Draw a curved, soft, tapered under-eye crescent.
 
-    Returns scores and an overlay image.
+    The top edge follows the lower eyelid.
+    The bottom edge curves downward.
+    The ends are tapered.
     """
 
-    original, left_region, right_region = get_under_eye_regions(
-        image_bytes
+    if curve is None or len(curve) < 4:
+        return
+
+    points = curve.astype(
+        np.float32
     )
 
-    if original is None or left_region is None or right_region is None:
+    # --------------------------------------------------------
+    # Sort from left to right.
+    # --------------------------------------------------------
+
+    points = points[
+        np.argsort(points[:, 0])
+    ]
+
+    # --------------------------------------------------------
+    # Remove duplicate X positions.
+    # --------------------------------------------------------
+
+    unique_points = []
+
+    last_x = None
+
+    for x, y in points:
+
+        x = int(x)
+        y = int(y)
+
+        if (
+            last_x is None
+            or abs(x - last_x) >= 2
+        ):
+            unique_points.append(
+                [x, y]
+            )
+
+            last_x = x
+
+    if len(unique_points) < 3:
+        return
+
+    points = np.array(
+        unique_points,
+        dtype=np.float32
+    )
+
+    xs = points[:, 0]
+    ys = points[:, 1]
+
+    eye_width = (
+        float(np.max(xs))
+        -
+        float(np.min(xs))
+    )
+
+    eye_width = max(
+        eye_width,
+        20
+    )
+
+    # --------------------------------------------------------
+    # Create a smooth eyelid curve.
+    # --------------------------------------------------------
+
+    sample_count = 40
+
+    sample_x = np.linspace(
+        np.min(xs),
+        np.max(xs),
+        sample_count
+    )
+
+    sample_y = np.interp(
+        sample_x,
+        xs,
+        ys
+    )
+
+    # Smooth the Y curve.
+    kernel = np.ones(
+        5,
+        dtype=np.float32
+    ) / 5.0
+
+    padded_y = np.pad(
+        sample_y,
+        (
+            2,
+            2
+        ),
+        mode="edge"
+    )
+
+    smooth_y = np.convolve(
+        padded_y,
+        kernel,
+        mode="valid"
+    )
+
+    # --------------------------------------------------------
+    # Create tapered thickness.
+    # --------------------------------------------------------
+
+    position = np.linspace(
+        0,
+        1,
+        sample_count
+    )
+
+    # 0 at both corners, 1 at center.
+    taper = np.sin(
+        position * np.pi
+    )
+
+    # Main crescent thickness.
+    base_thickness = (
+        eye_width * 0.13
+    )
+
+    thickness = (
+        base_thickness
+        *
+        (
+            0.20
+            +
+            0.80 * taper
+        )
+    )
+
+    thickness = np.maximum(
+        thickness,
+        5
+    )
+
+    # --------------------------------------------------------
+    # Top edge.
+    #
+    # Move just slightly below the eyelid so the highlight
+    # does not cover the eye.
+    # --------------------------------------------------------
+
+    top_y = (
+        smooth_y
+        + 2
+    )
+
+    # --------------------------------------------------------
+    # Bottom edge.
+    # --------------------------------------------------------
+
+    bottom_y = (
+        smooth_y
+        + thickness
+    )
+
+    top_points = np.column_stack(
+        (
+            sample_x,
+            top_y
+        )
+    )
+
+    bottom_points = np.column_stack(
+        (
+            sample_x,
+            bottom_y
+        )
+    )
+
+    polygon = np.vstack(
+        (
+            top_points,
+            bottom_points[::-1]
+        )
+    ).astype(
+        np.int32
+    )
+
+    cv2.fillPoly(
+        mask,
+        [polygon],
+        255
+    )
+def _analyze_dark_circles(image_bytes):
+    """
+    Estimate dark-circle intensity in the under-eye regions
+    and create a soft crescent-shaped visualization.
+
+    This is a visual computer-vision estimate and is not
+    a medical diagnosis.
+    """
+
+    original, left_curve, right_curve = (
+        get_under_eye_regions(
+            image_bytes
+        )
+    )
+
+    if (
+        original is None
+        or left_curve is None
+        or right_curve is None
+    ):
         return {
             "left": 0,
             "right": 0,
@@ -505,24 +706,36 @@ def _analyze_dark_circles(image_bytes):
 
     h, w = original.shape[:2]
 
+    # ========================================================
+    # CREATE CRESCENT MASK
+    # ========================================================
+
     mask = np.zeros(
         (h, w),
         dtype=np.uint8
     )
 
-    cv2.fillPoly(
+    _draw_dark_circle_crescent(
         mask,
-        [left_region],
-        255
+        left_curve
     )
 
-    cv2.fillPoly(
+    _draw_dark_circle_crescent(
         mask,
-        [right_region],
-        255
+        right_curve
     )
 
-    # Convert image to LAB.
+    # Soft edges.
+    mask = cv2.GaussianBlur(
+        mask,
+        (25, 25),
+        0
+    )
+
+    # ========================================================
+    # ANALYZE EACH EYE
+    # ========================================================
+
     lab = cv2.cvtColor(
         original,
         cv2.COLOR_BGR2LAB
@@ -530,17 +743,19 @@ def _analyze_dark_circles(image_bytes):
 
     luminance = lab[:, :, 0]
 
-    # Analyze each eye independently.
-    def region_score(region):
+    def region_score(curve):
+
+        if curve is None:
+            return 0
+
         region_mask = np.zeros(
             (h, w),
             dtype=np.uint8
         )
 
-        cv2.fillPoly(
+        _draw_dark_circle_crescent(
             region_mask,
-            [region],
-            255
+            curve
         )
 
         pixels = luminance[
@@ -550,12 +765,11 @@ def _analyze_dark_circles(image_bytes):
         if len(pixels) < 20:
             return 0
 
-        # Lower L value = darker region.
         mean_l = float(
             np.mean(pixels)
         )
 
-        # Convert darkness into a 0-100 score.
+        # Lower luminance = visually darker region.
         score = 100 - (
             mean_l / 255 * 100
         )
@@ -569,73 +783,58 @@ def _analyze_dark_circles(image_bytes):
         )
 
     left_score = region_score(
-        left_region
+        left_curve
     )
 
     right_score = region_score(
-        right_region
+        right_curve
     )
 
     overall_score = (
         left_score + right_score
     ) / 2
 
-    # ---------------------------------------------------------
-    # Create a soft visual overlay.
-    # ---------------------------------------------------------
+    # ========================================================
+    # CREATE VISUALIZATION
+    # ========================================================
 
-    overlay = original.copy()
-
-    # Dark-circle visualization color.
-    # BGR = blue/purple.
-    overlay_color = (
-        180,
-        80,
-        180
+    dark_color = (
+        220,
+        100,
+        40
     )
 
-    colored = np.zeros_like(
+    color_layer = np.zeros_like(
         original
     )
 
-    colored[:, :] = overlay_color
+    color_layer[:, :] = dark_color
 
-    blended = cv2.addWeighted(
-        original,
-        0.70,
-        colored,
-        0.30,
-        0
+    alpha = (
+        mask.astype(np.float32)
+        / 255.0
+        * 0.14
     )
 
-    # Only apply the color inside the eye masks.
-    mask_3d = cv2.cvtColor(
-        mask,
-        cv2.COLOR_GRAY2BGR
+    alpha = alpha[:, :, None]
+
+    highlighted = (
+        original.astype(np.float32)
+        * (1.0 - alpha)
+        +
+        color_layer.astype(np.float32)
+        * alpha
     )
 
-    highlighted = np.where(
-        mask_3d > 0,
-        blended,
-        original
-    )
-
-    # Draw a soft contour around both regions.
-    cv2.polylines(
+    highlighted = np.clip(
         highlighted,
-        [left_region],
-        True,
-        overlay_color,
-        2
-    )
+        0,
+        255
+    ).astype(np.uint8)
 
-    cv2.polylines(
-        highlighted,
-        [right_region],
-        True,
-        overlay_color,
-        2
-    )
+    # ========================================================
+    # SAVE
+    # ========================================================
 
     output_path = (
         "app/static/dark_circles_result.jpg"
@@ -643,7 +842,11 @@ def _analyze_dark_circles(image_bytes):
 
     cv2.imwrite(
         output_path,
-        highlighted
+        highlighted,
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            95
+        ]
     )
 
     return {
@@ -659,9 +862,8 @@ def _analyze_dark_circles(image_bytes):
             overall_score,
             2
         ),
-        "overlay_path": (
+        "overlay_path":
             "/static/dark_circles_result.jpg"
-        ),
     }
 
 def _analyze_pigmentation(image_bytes: bytes):
@@ -1599,10 +1801,10 @@ def _build_combined_skin_overlay(
         0.10
     )
     # ========================================================
-    # DARK CIRCLES — CURVED UNDER-EYE SHAPES
+    # DARK CIRCLES — LOWER EYELID CRESCENTS
     # ========================================================
 
-    _, left_eye_region, right_eye_region = (
+    _, left_eye_curve, right_eye_curve = (
         get_under_eye_regions(
             image_bytes
         )
@@ -1613,163 +1815,36 @@ def _build_combined_skin_overlay(
         dtype=np.uint8
     )
 
+    # --------------------------------------------------------
+    # Left under-eye crescent
+    # --------------------------------------------------------
 
-    def add_under_eye_shape(
-        mask,
-        region
-    ):
-        """
-        Create a soft, slightly rotated under-eye oval.
-
-        The oval is positioned from the center of the
-        under-eye region and kept close to the lower eyelid.
-        """
-
-        if region is None:
-            return
-
-        points = region.reshape(
-            -1,
-            2
-        ).astype(np.float32)
-
-        if len(points) < 4:
-            return
-
-        min_x = float(
-            np.min(points[:, 0])
-        )
-
-        max_x = float(
-            np.max(points[:, 0])
-        )
-
-        min_y = float(
-            np.min(points[:, 1])
-        )
-
-        max_y = float(
-            np.max(points[:, 1])
-        )
-
-        eye_width = max(
-            max_x - min_x,
-            1
-        )
-
-        eye_height = max(
-            max_y - min_y,
-            1
-        )
-
-        # --------------------------------------------------------
-        # Horizontal center
-        # --------------------------------------------------------
-
-        center_x = (
-            min_x + max_x
-        ) / 2
-
-        # --------------------------------------------------------
-        # IMPORTANT:
-        # Put the center around the lower eyelid,
-        # not at the bottom of the whole region.
-        # --------------------------------------------------------
-
-        center_y = (
-            min_y
-            + eye_height * 0.48
-        )
-
-        # --------------------------------------------------------
-        # Wide, shallow shape similar to the reference image.
-        # --------------------------------------------------------
-
-        oval_width = max(
-            eye_width * 0.78,
-            35
-        )
-
-        oval_height = max(
-            eye_width * 0.17,
-            12
-        )
-
-        # --------------------------------------------------------
-        # Estimate slight eye angle.
-        # --------------------------------------------------------
-
-        # Use left-most and right-most points to estimate
-        # the direction of the eye.
-        sorted_points = points[
-            np.argsort(points[:, 0])
-        ]
-
-        left_point = sorted_points[0]
-        right_point = sorted_points[-1]
-
-        angle = np.degrees(
-            np.arctan2(
-                right_point[1] - left_point[1],
-                right_point[0] - left_point[0]
-            )
-        )
-
-        # Limit rotation so the indicator remains elegant.
-        angle = float(
-            np.clip(
-                angle,
-                -12,
-                12
-            )
-        )
-
-        # --------------------------------------------------------
-        # Draw rotated ellipse.
-        # --------------------------------------------------------
-
-        cv2.ellipse(
-            mask,
-            (
-                int(center_x),
-                int(center_y)
-            ),
-            (
-                int(oval_width / 2),
-                int(oval_height / 2)
-            ),
-            angle,
-            0,
-            360,
-            255,
-            -1
-        )
-
-
-    # Left under-eye
-    add_under_eye_shape(
+    _draw_dark_circle_crescent(
         dark_mask,
-        left_eye_region
-    )
-
-    # Right under-eye
-    add_under_eye_shape(
-        dark_mask,
-        right_eye_region
+        left_eye_curve
     )
 
     # --------------------------------------------------------
-    # Soft feathered edges.
+    # Right under-eye crescent
+    # --------------------------------------------------------
+
+    _draw_dark_circle_crescent(
+        dark_mask,
+        right_eye_curve
+    )
+
+    # --------------------------------------------------------
+    # Soft edges
     # --------------------------------------------------------
 
     dark_mask = cv2.GaussianBlur(
         dark_mask,
-        (31, 31),
+        (25, 25),
         0
     )
 
     # --------------------------------------------------------
-    # Apply subtle blue/orange visualization.
+    # Apply subtle dark-circle highlight
     # --------------------------------------------------------
 
     result = apply_soft_overlay(
