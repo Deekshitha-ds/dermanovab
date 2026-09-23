@@ -1,5 +1,13 @@
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, JSON
+    Column,
+    Integer,
+    String,
+    Float,
+    Boolean,
+    Text,
+    DateTime,
+    ForeignKey,
+    JSON
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -8,6 +16,7 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(120), nullable=False)
     email = Column(String(180), unique=True, index=True, nullable=False)
@@ -31,6 +40,7 @@ class User(Base):
 
 class Product(Base):
     __tablename__ = "products"
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
     brand = Column(String(80), nullable=False)
@@ -50,16 +60,50 @@ class Product(Base):
     description = Column(Text, nullable=True)
     purchase_link = Column(String(500), nullable=True)
 
+    # One Product can have many store offers
+    offers = relationship(
+        "ProductOffer",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+
+
+class ProductOffer(Base):
+    __tablename__ = "product_offers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id"),
+        nullable=False
+    )
+    store = Column(String(30), nullable=False)
+    price = Column(Float, nullable=False)
+    purchase_link = Column(String(1000), nullable=False)
+    availability = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Each offer belongs to one Product
+    product = relationship(
+        "Product",
+        back_populates="offers"
+    )
+
 
 class Analysis(Base):
     __tablename__ = "analyses"
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     mode = Column(String(10), nullable=False)  # 'skin' or 'hair'
     image_url = Column(String(500), nullable=True)
     detected_type = Column(String(30), nullable=True)
     detected_issues = Column(JSON, nullable=False, default=list)
-    scores = Column(JSON, nullable=False, default=dict)  # {"health":.., "hydration":.., "oiliness":.., "confidence":..}
+    scores = Column(
+        JSON,
+        nullable=False,
+        default=dict
+    )  # {"health":.., "hydration":.., "oiliness":.., "confidence":..}
     face_detected = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -68,16 +112,21 @@ class Analysis(Base):
 
 class Recommendation(Base):
     __tablename__ = "recommendations"
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     analysis_id = Column(Integer, ForeignKey("analyses.id"), nullable=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    routine_slot = Column(String(20), nullable=True)  # morning / night / weekly / monthly
+    routine_slot = Column(
+        String(20),
+        nullable=True
+    )  # morning / night / weekly / monthly
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class WishlistItem(Base):
     __tablename__ = "wishlist"
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
@@ -88,6 +137,7 @@ class WishlistItem(Base):
 
 class History(Base):
     __tablename__ = "history"
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     action = Column(String(60), nullable=False)

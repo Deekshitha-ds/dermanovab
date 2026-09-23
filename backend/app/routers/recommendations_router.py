@@ -25,7 +25,24 @@ def get_routine(payload: RecommendationRequest, db: Session = Depends(get_db), c
     routine = build_routine(products)
 
     def ser(p):
-        return ProductOut.model_validate(p).model_dump() if p else None
+       if not p:
+         return None
+
+       data = ProductOut.model_validate(p).model_dump()
+
+       data["offers"] = [
+        {
+            "id": offer.id,
+            "store": offer.store,
+            "price": offer.price,
+            "purchase_link": offer.purchase_link,
+            "availability": offer.availability,
+        }
+            for offer in p.offers
+            if offer.availability
+    ]
+
+       return data
 
     return {
         "morning": [ser(p) for p in routine["morning"]],
