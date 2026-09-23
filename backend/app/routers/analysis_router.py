@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException,Form
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -10,11 +10,31 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
 @router.post("/skin")
-async def run_skin_analysis(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def run_skin_analysis(
+    file: UploadFile = File(...),
+    mode: str = Form("upload"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     image_bytes = await file.read()
+
     if not image_bytes:
-        raise HTTPException(status_code=400, detail="Empty image upload.")
-    result = analyze_skin(image_bytes)
+        raise HTTPException(
+            status_code=400,
+            detail="Empty image upload."
+        )
+
+    if mode not in {"live", "upload"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid analysis mode. Use 'live' or 'upload'."
+        )
+
+    result = analyze_skin(
+        image_bytes,
+        mode=mode
+    )
+
     record = Analysis(
         user_id=current_user.id,
         mode="skin",
@@ -23,11 +43,15 @@ async def run_skin_analysis(file: UploadFile = File(...), db: Session = Depends(
         scores=result["scores"],
         face_detected=result["face_detected"],
     )
+
     db.add(record)
     db.commit()
     db.refresh(record)
-    return {"analysis_id": record.id, **result}
 
+    return {
+        "analysis_id": record.id,
+        **result
+    }
 
 @router.post("/hair")
 async def run_hair_analysis(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

@@ -37,6 +37,15 @@ class AnalysisResult(BaseModel):
     scores: Dict[str, float]
     face_detected: bool
 
+class ProductOfferOut(BaseModel):
+    store: str
+    price: float
+    purchase_link: str
+    availability: bool = True
+
+    class Config:
+        from_attributes = True
+
 
 class ProductOut(BaseModel):
     id: int
@@ -57,9 +66,10 @@ class ProductOut(BaseModel):
     description: Optional[str]
     purchase_link: Optional[str]
 
+    offers: List[ProductOfferOut] = []
+
     class Config:
         from_attributes = True
-
 
 class RecommendationRequest(BaseModel):
     budget: float
