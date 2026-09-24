@@ -68,7 +68,7 @@ def detect_skin(
 
     if mode == "live":
 
-        yolo_size = 640
+        yolo_size = 1024
 
     else:
 

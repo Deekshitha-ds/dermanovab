@@ -1,3 +1,6 @@
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
+from app.services.chatbot_service import generate_nova_response
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles 
@@ -7,6 +10,24 @@ from app.routers import auth_router, users_router, analysis_router, products_rou
 from app.routers.misc_routers import wishlist_router, weather_router, chatbot_router, admin_router
 
 app = FastAPI(title="DermaNova AI API", version="1.0.0")
+
+class ChatRequest(BaseModel):
+    message: str
+    skin_analysis: Optional[Dict[str, Any]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    reply = generate_nova_response(
+        message=request.message,
+        skin_analysis=request.skin_analysis,
+        conversation_history=request.conversation_history
+    )
+
+    return {
+        "reply": reply
+    }
 
 # Mount static files directory
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
