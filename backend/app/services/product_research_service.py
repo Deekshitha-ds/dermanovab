@@ -1,21 +1,23 @@
 """
 DermaNova AI - Live Product Price Research
 
-Researches current Google Shopping results for a recommended
-skincare product, compares supported marketplaces, and returns
-one cheapest matching available result.
+Researches current Google Shopping results and then uses
+SerpApi's Immersive Product API to obtain direct merchant
+purchase links.
 
 Supported stores:
 - Amazon
 - Nykaa
 - Purplle
 
-This service is separate from the product recommendation/scoring engine.
+The service compares supported stores internally and returns
+ONE selected product offer to the frontend.
 """
 
 import os
 import re
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -36,8 +38,10 @@ SUPPORTED_STORES = {
     "amazon": "Amazon",
     "amazon.in": "Amazon",
     "amazon india": "Amazon",
+
     "nykaa": "Nykaa",
     "nykaa.com": "Nykaa",
+
     "purplle": "Purplle",
     "purplle.com": "Purplle",
 }
@@ -57,7 +61,6 @@ def _normalise(text: Optional[str]) -> str:
 
     text = str(text).lower()
 
-    # Keep letters, numbers, spaces and %
     text = re.sub(
         r"[^a-z0-9\s%]+",
         " ",
@@ -104,7 +107,7 @@ def _tokens(text: str) -> set[str]:
 
 def _store_name(source: Optional[str]) -> Optional[str]:
     """
-    Converts SerpApi source names into our supported store names.
+    Converts a store/source name into our supported store name.
     """
 
     if not source:
@@ -124,6 +127,37 @@ def _store_name(source: Optional[str]) -> Optional[str]:
     return None
 
 
+def _store_from_url(url: Optional[str]) -> Optional[str]:
+    """
+    Detects supported store from a merchant URL.
+    """
+
+    if not url:
+        return None
+
+    try:
+        hostname = urlparse(url).netloc.lower()
+
+        hostname = hostname.replace(
+            "www.",
+            ""
+        )
+
+        if "amazon.in" in hostname:
+            return "Amazon"
+
+        if "nykaa.com" in hostname:
+            return "Nykaa"
+
+        if "purplle.com" in hostname:
+            return "Purplle"
+
+    except Exception:
+        pass
+
+    return None
+
+
 # ============================================================
 # PRODUCT MATCHING
 # ============================================================
@@ -135,9 +169,6 @@ def _brand_matches(
     """
     Checks whether the recommended brand appears in the
     shopping result title.
-
-    This prevents DermaNova from selecting a cheaper
-    product from a completely different brand.
     """
 
     brand_normalized = _normalise(brand)
@@ -157,8 +188,6 @@ def _product_match_score(
     """
     Calculates how closely a shopping result matches
     the recommended product.
-
-    Brand is handled separately.
     """
 
     product_tokens = _tokens(product_name)
@@ -173,49 +202,7 @@ def _product_match_score(
 
 
 # ============================================================
-# URL EXTRACTION
-# ============================================================
-
-def _extract_purchase_link(
-    result: Dict[str, Any]
-) -> Optional[str]:
-    """
-    Returns a direct merchant link when SerpApi provides one.
-
-    Google Shopping can return a product_link that points
-    back to Google's Shopping page instead of the merchant.
-    That URL is NOT exposed as the purchase link.
-    """
-
-    possible_fields = [
-        "link",
-        "merchant_link",
-        "source_link",
-    ]
-
-    for field in possible_fields:
-
-        value = result.get(field)
-
-        if not isinstance(value, str):
-            continue
-
-        value = value.strip()
-
-        if not value:
-            continue
-
-        # Ignore Google Shopping URLs.
-        if "google." in value and "/search" in value:
-            continue
-
-        return value
-
-    return None
-
-
-# ============================================================
-# SERPAPI SEARCH
+# SERPAPI GOOGLE SHOPPING
 # ============================================================
 
 def _search_google_shopping(
@@ -240,7 +227,6 @@ def _search_google_shopping(
         "gl": "in",
         "hl": "en",
 
-        # Return shopping results
         "num": "40",
     }
 
@@ -254,7 +240,6 @@ def _search_google_shopping(
 
     data = response.json()
 
-    # SerpApi may return an API error even with HTTP 200.
     if data.get("error"):
         raise RuntimeError(
             f"SerpApi error: {data.get('error')}"
@@ -267,6 +252,184 @@ def _search_google_shopping(
 
 
 # ============================================================
+# IMMERSIVE PRODUCT API
+# ============================================================
+
+def _get_immersive_product(
+    page_token: str
+) -> Dict[str, Any]:
+    """
+    Gets detailed product information including merchant
+    stores and direct purchase links.
+    """
+
+    if not SERPAPI_KEY:
+        raise RuntimeError(
+            "SERPAPI_KEY is not configured in the .env file."
+        )
+
+    params = {
+        "engine": "google_immersive_product",
+        "page_token": page_token,
+        "api_key": SERPAPI_KEY,
+        "more_stores": "true",
+    }
+
+    response = requests.get(
+        SERPAPI_URL,
+        params=params,
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("error"):
+        raise RuntimeError(
+            f"SerpApi immersive product error: "
+            f"{data.get('error')}"
+        )
+
+    return data
+
+
+# ============================================================
+# DIRECT MERCHANT OFFER EXTRACTION
+# ============================================================
+
+def _extract_store_offers(
+    product_data: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """
+    Extracts supported merchant offers from the immersive
+    product response.
+
+    Only Amazon, Nykaa and Purplle are returned.
+    """
+
+    product_results = product_data.get(
+        "product_results",
+        {}
+    )
+
+    stores = product_results.get(
+        "stores",
+        []
+    )
+
+    offers: List[Dict[str, Any]] = []
+
+    for store_result in stores:
+
+        if not isinstance(
+            store_result,
+            dict
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # Direct merchant link
+        # ----------------------------------------------------
+
+        link = store_result.get(
+            "link"
+        )
+
+        if not isinstance(link, str):
+            continue
+
+        link = link.strip()
+
+        if not link:
+            continue
+
+        # ----------------------------------------------------
+        # Detect store
+        # ----------------------------------------------------
+
+        store = None
+
+        possible_store_fields = [
+            "source",
+            "store",
+            "merchant",
+            "seller",
+            "name",
+            "title",
+        ]
+
+        for field in possible_store_fields:
+
+            value = store_result.get(
+                field
+            )
+
+            store = _store_name(value)
+
+            if store:
+                break
+
+        # If the store name isn't present,
+        # identify it from the URL.
+        if not store:
+            store = _store_from_url(
+                link
+            )
+
+        # Ignore unsupported stores.
+        if not store:
+            continue
+
+        # ----------------------------------------------------
+        # Price
+        # ----------------------------------------------------
+
+        price = store_result.get(
+            "extracted_price"
+        )
+
+        if price is None:
+            price = store_result.get(
+                "price"
+            )
+
+        if price is None:
+            continue
+
+        try:
+            if isinstance(price, str):
+                price = re.sub(
+                    r"[^0-9.]+",
+                    "",
+                    price
+                )
+
+            price = float(price)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if price <= 0:
+            continue
+
+        # ----------------------------------------------------
+        # Save offer
+        # ----------------------------------------------------
+
+        offers.append({
+            "store": store,
+            "price": price,
+            "purchase_link": link,
+        })
+
+    return offers
+
+
+# ============================================================
 # LIVE PRODUCT RESEARCH
 # ============================================================
 
@@ -276,15 +439,13 @@ def research_best_offer(
     category: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Searches Google Shopping, filters for the requested
-    brand/product, compares supported stores, and returns
-    the cheapest matching result.
-
-    Returns one result only.
+    Searches Google Shopping, finds the matching product,
+    opens the immersive product page, compares supported
+    merchant offers, and returns ONE selected offer.
     """
 
     # --------------------------------------------------------
-    # Build search query
+    # Build query
     # --------------------------------------------------------
 
     query_parts = [
@@ -293,7 +454,9 @@ def research_best_offer(
     ]
 
     if category:
-        query_parts.append(category)
+        query_parts.append(
+            category
+        )
 
     query = " ".join(
         part.strip()
@@ -302,37 +465,20 @@ def research_best_offer(
     )
 
     # --------------------------------------------------------
-    # Search Google Shopping
+    # Google Shopping search
     # --------------------------------------------------------
 
-    results = _search_google_shopping(query)
+    results = _search_google_shopping(
+        query
+    )
 
     candidates: List[Dict[str, Any]] = []
 
     # --------------------------------------------------------
-    # Process shopping results
+    # Find matching products
     # --------------------------------------------------------
 
     for result in results:
-
-        # ----------------------------------------------------
-        # Store
-        # ----------------------------------------------------
-
-        source = result.get(
-            "source",
-            ""
-        )
-
-        store = _store_name(source)
-
-        # Ignore unsupported stores
-        if not store:
-            continue
-
-        # ----------------------------------------------------
-        # Product title
-        # ----------------------------------------------------
 
         title = result.get(
             "title",
@@ -342,33 +488,22 @@ def research_best_offer(
         if not title:
             continue
 
-        # ----------------------------------------------------
-        # Brand validation
-        # ----------------------------------------------------
-
+        # Brand must match.
         if not _brand_matches(
             brand=brand,
             result_title=title,
         ):
             continue
 
-        # ----------------------------------------------------
-        # Product matching
-        # ----------------------------------------------------
-
+        # Product similarity.
         match_score = _product_match_score(
             product_name=product_name,
             brand=brand,
             result_title=title,
         )
 
-        # Require at least a reasonable product match.
         if match_score < 0.50:
             continue
-
-        # ----------------------------------------------------
-        # Price
-        # ----------------------------------------------------
 
         price = result.get(
             "extracted_price"
@@ -388,50 +523,27 @@ def research_best_offer(
         if price <= 0:
             continue
 
-        # ----------------------------------------------------
-        # Purchase URL
-        # ----------------------------------------------------
-
-        purchase_link = _extract_purchase_link(
-            result
-        )
-
-        # ----------------------------------------------------
-        # Image
-        # ----------------------------------------------------
-
-        thumbnail = result.get(
-            "thumbnail"
-        )
-
-        # ----------------------------------------------------
-        # Rating
-        # ----------------------------------------------------
-
-        rating = result.get(
-            "rating"
-        )
-
-        # ----------------------------------------------------
-        # Save candidate
-        # ----------------------------------------------------
-
         candidates.append({
-            "store": store,
-            "price": price,
-            "purchase_link": purchase_link,
             "title": title,
-            "thumbnail": thumbnail,
-            "rating": rating,
+            "price": price,
+            "thumbnail": result.get(
+                "thumbnail"
+            ),
+            "rating": result.get(
+                "rating"
+            ),
             "match_score": round(
                 match_score,
                 3
             ),
+            "immersive_token": result.get(
+                "immersive_product_page_token"
+            ),
         })
 
-    # ========================================================
-    # NO MATCH FOUND
-    # ========================================================
+    # --------------------------------------------------------
+    # No matching product
+    # --------------------------------------------------------
 
     if not candidates:
         return {
@@ -446,28 +558,101 @@ def research_best_offer(
             "source": "live_research",
         }
 
-    # ========================================================
-    # SELECT CHEAPEST MATCHING PRODUCT
-    # ========================================================
+    # --------------------------------------------------------
+    # Pick strongest product match
+    #
+    # We use match score first so that the immersive API
+    # is opened for the most relevant product.
+    # --------------------------------------------------------
 
     candidates.sort(
-        key=lambda item: item["price"]
+        key=lambda item: (
+            -item["match_score"],
+            item["price"],
+        )
     )
 
-    best = candidates[0]
+    best_product = candidates[0]
 
-    # ========================================================
-    # RETURN ONE PRODUCT
-    # ========================================================
+    # --------------------------------------------------------
+    # Get direct merchant offers
+    # --------------------------------------------------------
+
+    immersive_token = best_product.get(
+        "immersive_token"
+    )
+
+    offers: List[Dict[str, Any]] = []
+
+    if immersive_token:
+
+        try:
+            immersive_data = _get_immersive_product(
+                immersive_token
+            )
+
+            offers = _extract_store_offers(
+                immersive_data
+            )
+
+        except Exception as exc:
+
+            print(
+                "Immersive product research failed:",
+                exc
+            )
+
+    # --------------------------------------------------------
+    # If direct merchant offers are available
+    # --------------------------------------------------------
+
+    if offers:
+
+        # Cheapest supported merchant offer.
+        offers.sort(
+            key=lambda item: item["price"]
+        )
+
+        best_offer = offers[0]
+
+        return {
+            "found": True,
+            "price": best_offer["price"],
+            "store": best_offer["store"],
+            "purchase_link": best_offer[
+                "purchase_link"
+            ],
+            "title": best_product["title"],
+            "thumbnail": best_product[
+                "thumbnail"
+            ],
+            "rating": best_product[
+                "rating"
+            ],
+            "match_score": best_product[
+                "match_score"
+            ],
+            "source": "live_research",
+        }
+
+    # --------------------------------------------------------
+    # Fallback
+    #
+    # If immersive research does not return a supported
+    # merchant link, still return the matching product,
+    # but don't expose a fake Google Shopping URL.
+    # --------------------------------------------------------
 
     return {
         "found": True,
-        "price": best["price"],
-        "store": best["store"],
-        "purchase_link": best["purchase_link"],
-        "title": best["title"],
-        "thumbnail": best["thumbnail"],
-        "rating": best["rating"],
-        "match_score": best["match_score"],
+        "price": best_product["price"],
+        "store": None,
+        "purchase_link": None,
+        "title": best_product["title"],
+        "thumbnail": best_product["thumbnail"],
+        "rating": best_product["rating"],
+        "match_score": best_product[
+            "match_score"
+        ],
         "source": "live_research",
     }
