@@ -6,9 +6,97 @@ from app.auth import get_current_user
 from app.models.orm_models import User, Analysis
 from app.services.ai_service import analyze_skin, analyze_hair
 
+from app.services.recommendation_service import (
+    recommend_products,
+    build_routine,
+)
+
+from app.services.product_research_service import (
+    research_best_offer,
+)
+
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
+def _research_product(product):
+    """
+    Get live shopping information for one recommended product.
+    """
+
+    try:
+        result = research_best_offer(
+            product_name=product.name,
+            brand=product.brand,
+            category=product.category,
+        )
+
+        return result
+
+    except Exception as exc:
+        print("Live product research failed:", exc)
+
+        return {
+            "found": False,
+            "price": None,
+            "store": None,
+            "purchase_link": None,
+            "title": None,
+            "thumbnail": None,
+            "rating": None,
+            "match_score": None,
+        }
+
+
+def _serialize_recommended_product(product):
+    """
+    Convert a database Product into frontend-friendly data
+    and attach live shopping information.
+    """
+
+    if not product:
+        return None
+
+    live = _research_product(product)
+
+    return {
+        "id": product.id,
+        "name": product.name,
+        "brand": product.brand,
+        "category": product.category,
+
+        "price": (
+            live["price"]
+            if live.get("price") is not None
+            else product.price
+        ),
+
+        "image_url": (
+            live["thumbnail"]
+            if live.get("thumbnail")
+            else product.image_url
+        ),
+
+        "rating": (
+            live["rating"]
+            if live.get("rating") is not None
+            else product.rating
+        ),
+
+        "description": product.description,
+
+        "store": live.get("store"),
+
+        "purchase_link": live.get(
+            "purchase_link"
+        ),
+
+        "live_research": {
+            "found": live.get("found", False),
+            "store": live.get("store"),
+            "price": live.get("price"),
+            "match_score": live.get("match_score"),
+        },
+    }
 @router.post("/skin")
 async def run_skin_analysis(
     file: UploadFile = File(...),
@@ -30,11 +118,20 @@ async def run_skin_analysis(
             detail="Invalid analysis mode. Use 'live' or 'upload'."
         )
 
+    # -----------------------------------------
+    # 1. Run AI / YOLO skin analysis
+    # -----------------------------------------
     result = analyze_skin(
         image_bytes,
         mode=mode
     )
 
+    detected_issues = result.get("detected_issues", [])
+    skin_type = result.get("detected_type")
+
+    # -----------------------------------------
+    # 2. Save analysis result to database
+    # -----------------------------------------
     record = Analysis(
         user_id=current_user.id,
         mode="skin",
@@ -48,9 +145,82 @@ async def run_skin_analysis(
     db.commit()
     db.refresh(record)
 
+    # -----------------------------------------
+    # 3. Find products based on detected issues
+    # -----------------------------------------
+    routine_products = recommend_products(
+        db,
+        budget=current_user.monthly_budget or 800,
+        skin_type=skin_type,
+        hair_type=None,
+        concerns=detected_issues,
+        dermatologist_only=False,
+        sensitive=current_user.sensitive_skin or False,
+        weather_condition=None,
+    )
+
+    # -----------------------------------------
+    # 4. Build morning + evening routine
+    # -----------------------------------------
+    routine = build_routine(routine_products)
+
+    morning_routine = [
+        _serialize_recommended_product(product)
+        for product in routine["morning"]
+        if product
+    ]
+
+    evening_routine = [
+        _serialize_recommended_product(product)
+        for product in routine["night"]
+        if product
+    ]
+
+    # -----------------------------------------
+    # 5. Find one major concern product
+    # -----------------------------------------
+    major_product = None
+
+    treatment_categories = {
+        "serum",
+        "treatment",
+        "spot treatment",
+        "cream",
+    }
+
+    for product in routine_products:
+        category = (product.category or "").strip().lower()
+        concern_text = (product.concern or "").lower()
+
+        issue_match = any(
+            issue.lower() in concern_text
+            for issue in detected_issues
+        )
+
+        category_match = category in treatment_categories
+
+        if issue_match and category_match:
+            major_product = product
+            break
+
+    if major_product is None:
+        major_product = routine.get("best_choice")
+
+    major_recommendation = (
+        _serialize_recommended_product(major_product)
+        if major_product
+        else None
+    )
+
+    # -----------------------------------------
+    # 6. Return complete scan result
+    # -----------------------------------------
     return {
         "analysis_id": record.id,
-        **result
+        **result,
+        "major_recommendation": major_recommendation,
+        "morning_routine": morning_routine,
+        "evening_routine": evening_routine,
     }
 
 @router.post("/hair")
