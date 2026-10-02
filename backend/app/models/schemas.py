@@ -63,6 +63,7 @@ class ProductOut(BaseModel):
     cruelty_free: bool
     vegan: bool
     rating: float
+    image_url: Optional[str] = None
     description: Optional[str]
     purchase_link: Optional[str]
 
