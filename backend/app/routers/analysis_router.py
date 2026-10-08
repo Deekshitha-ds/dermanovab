@@ -245,7 +245,7 @@ async def run_hair_analysis(file: UploadFile = File(...), db: Session = Depends(
 
 @router.get("/history")
 def get_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    records = db.query(Analysis).filter(Analysis.user_id == current_user.id).order_by(Analysis.created_at).all()
+    records = db.query(Analysis).filter(Analysis.user_id == current_user.id).order_by(Analysis.created_at.desc()).all()
     return [
         {
             "id": r.id,
@@ -257,3 +257,76 @@ def get_history(db: Session = Depends(get_db), current_user: User = Depends(get_
         }
         for r in records
     ]
+
+# ============================================================
+# GET ONE SKIN ANALYSIS REPORT
+# ============================================================
+
+@router.get("/history/{analysis_id}")
+def get_skin_report(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    record = (
+        db.query(Analysis)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Saved scan not found."
+        )
+
+    return {
+        "analysis_id": record.id,
+        "mode": record.mode,
+        "detected_type": record.detected_type,
+        "detected_issues": record.detected_issues,
+        "scores": record.scores,
+        "face_detected": record.face_detected,
+        "created_at": (
+            record.created_at.isoformat()
+            if record.created_at
+            else None
+        ),
+    }
+
+
+# ============================================================
+# DELETE ONE SKIN ANALYSIS
+# ============================================================
+
+@router.delete("/history/{analysis_id}")
+def delete_skin_report(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    record = (
+        db.query(Analysis)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Saved scan not found."
+        )
+
+    db.delete(record)
+    db.commit()
+
+    return {
+        "message": "Saved scan deleted successfully.",
+        "analysis_id": analysis_id,
+    }
