@@ -12,6 +12,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
+from sqlalchemy import UniqueConstraint
 
 
 class User(Base):
@@ -143,3 +144,35 @@ class History(Base):
     action = Column(String(60), nullable=False)
     details = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SavedScan(Base):
+    __tablename__ = "saved_scans"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    analysis_id = Column(
+        Integer,
+        ForeignKey("analyses.id"),
+        nullable=False,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "analysis_id",
+            name="uq_saved_scan_user_analysis",
+        ),
+    )
