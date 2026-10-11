@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth import get_current_user
-from app.models.orm_models import User, Analysis
+from app.models.orm_models import User, Analysis, SavedScan
 from app.services.ai_service import analyze_skin, analyze_hair
 
 from app.services.recommendation_service import (
@@ -329,4 +329,122 @@ def delete_skin_report(
     return {
         "message": "Saved scan deleted successfully.",
         "analysis_id": analysis_id,
+    }
+
+
+# ============================================================
+# GET ALL SAVED SCANS FOR THE CURRENT USER
+# ============================================================
+
+@router.get("/saved")
+def get_saved_scans(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    saved_records = (
+        db.query(SavedScan)
+        .filter(SavedScan.user_id == current_user.id)
+        .order_by(SavedScan.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": saved.analysis_id,
+            "analysis_id": saved.analysis_id,
+            "saved_at": saved.created_at.isoformat(),
+        }
+        for saved in saved_records
+    ]
+
+
+# ============================================================
+# SAVE ONE SCAN
+# ============================================================
+
+@router.post("/saved/{analysis_id}")
+def save_scan(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    analysis = (
+        db.query(Analysis)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="Scan not found in your account.",
+        )
+
+    existing = (
+        db.query(SavedScan)
+        .filter(
+            SavedScan.user_id == current_user.id,
+            SavedScan.analysis_id == analysis_id,
+        )
+        .first()
+    )
+
+    if existing:
+        return {
+            "message": "Scan is already saved.",
+            "analysis_id": analysis_id,
+            "saved": True,
+        }
+
+    saved = SavedScan(
+        user_id=current_user.id,
+        analysis_id=analysis_id,
+    )
+
+    db.add(saved)
+    db.commit()
+    db.refresh(saved)
+
+    return {
+        "message": "Scan saved successfully.",
+        "analysis_id": analysis_id,
+        "saved": True,
+    }
+
+
+# ============================================================
+# REMOVE ONE SCAN FROM SAVED SCANS
+# ============================================================
+
+@router.delete("/saved/{analysis_id}")
+def unsave_scan(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    saved = (
+        db.query(SavedScan)
+        .filter(
+            SavedScan.user_id == current_user.id,
+            SavedScan.analysis_id == analysis_id,
+        )
+        .first()
+    )
+
+    if not saved:
+        raise HTTPException(
+            status_code=404,
+            detail="This scan is not in your saved scans.",
+        )
+
+    db.delete(saved)
+    db.commit()
+
+    return {
+        "message": "Scan removed from saved scans.",
+        "analysis_id": analysis_id,
+        "saved": False,
     }
