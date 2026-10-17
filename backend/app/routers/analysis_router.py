@@ -97,6 +97,7 @@ def _serialize_recommended_product(product):
             "match_score": live.get("match_score"),
         },
     }
+
 @router.post("/skin")
 async def run_skin_analysis(
     file: UploadFile = File(...),
@@ -109,29 +110,19 @@ async def run_skin_analysis(
     if not image_bytes:
         raise HTTPException(
             status_code=400,
-            detail="Empty image upload."
+            detail="Empty image upload.",
         )
 
     if mode not in {"live", "upload"}:
         raise HTTPException(
             status_code=400,
-            detail="Invalid analysis mode. Use 'live' or 'upload'."
+            detail="Invalid analysis mode. Use 'live' or 'upload'.",
         )
 
-    # -----------------------------------------
-    # 1. Run AI / YOLO skin analysis
-    # -----------------------------------------
-    result = analyze_skin(
-        image_bytes,
-        mode=mode
-    )
+    # 1. Run AI skin analysis only.
+    result = analyze_skin(image_bytes, mode=mode)
 
-    detected_issues = result.get("detected_issues", [])
-    skin_type = result.get("detected_type")
-
-    # -----------------------------------------
-    # 2. Save analysis result to database
-    # -----------------------------------------
+    # 2. Save the analysis.
     record = Analysis(
         user_id=current_user.id,
         mode="skin",
@@ -145,13 +136,95 @@ async def run_skin_analysis(
     db.commit()
     db.refresh(record)
 
-    # -----------------------------------------
-    # 3. Find products based on detected issues
-    # -----------------------------------------
+    # 3. Return the scan immediately.
+    # Product research happens in a separate endpoint.
+    return {
+        "analysis_id": record.id,
+        **result,
+        "major_recommendation": None,
+        "morning_routine": [],
+        "evening_routine": [],
+    }
+
+@router.post("/skin")
+async def run_skin_analysis(
+    file: UploadFile = File(...),
+    mode: str = Form("upload"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    image_bytes = await file.read()
+
+    if not image_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="Empty image upload.",
+        )
+
+    if mode not in {"live", "upload"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid analysis mode. Use 'live' or 'upload'.",
+        )
+
+    # 1. Run AI skin analysis only.
+    result = analyze_skin(image_bytes, mode=mode)
+
+    # 2. Save the analysis.
+    record = Analysis(
+        user_id=current_user.id,
+        mode="skin",
+        detected_type=result["detected_type"],
+        detected_issues=result["detected_issues"],
+        scores=result["scores"],
+        face_detected=result["face_detected"],
+    )
+
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    # 3. Return the scan immediately.
+    # Product research happens in a separate endpoint.
+    return {
+        "analysis_id": record.id,
+        **result,
+        "major_recommendation": None,
+        "morning_routine": [],
+        "evening_routine": [],
+    }
+
+
+@router.get("/history/{analysis_id}/recommendations")
+def get_skin_recommendations(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Only return recommendations for this user's own skin scan.
+    record = (
+        db.query(Analysis)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+            Analysis.mode == "skin",
+        )
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Skin scan not found.",
+        )
+
+    detected_issues = record.detected_issues or []
+
+    # Product selection starts only when this endpoint is requested.
     routine_products = recommend_products(
         db,
         budget=current_user.monthly_budget or 800,
-        skin_type=skin_type,
+        skin_type=record.detected_type,
         hair_type=None,
         concerns=detected_issues,
         dermatologist_only=False,
@@ -159,9 +232,6 @@ async def run_skin_analysis(
         weather_condition=None,
     )
 
-    # -----------------------------------------
-    # 4. Build morning + evening routine
-    # -----------------------------------------
     routine = build_routine(routine_products)
 
     morning_routine = [
@@ -176,9 +246,7 @@ async def run_skin_analysis(
         if product
     ]
 
-    # -----------------------------------------
-    # 5. Find one major concern product
-    # -----------------------------------------
+    # Find a major treatment for a detected concern.
     major_product = None
 
     treatment_categories = {
@@ -197,9 +265,7 @@ async def run_skin_analysis(
             for issue in detected_issues
         )
 
-        category_match = category in treatment_categories
-
-        if issue_match and category_match:
+        if issue_match and category in treatment_categories:
             major_product = product
             break
 
@@ -212,12 +278,8 @@ async def run_skin_analysis(
         else None
     )
 
-    # -----------------------------------------
-    # 6. Return complete scan result
-    # -----------------------------------------
     return {
         "analysis_id": record.id,
-        **result,
         "major_recommendation": major_recommendation,
         "morning_routine": morning_routine,
         "evening_routine": evening_routine,
