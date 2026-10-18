@@ -3,7 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles 
 from pathlib import Path
 from app.database import Base, engine
-from app.routers import auth_router, users_router, analysis_router, products_router, recommendations_router
+from app.routers import (
+    auth_router,
+    users_router,
+    analysis_router,
+    products_router,
+    recommendations_router,
+    saved_products_router,
+)
 from app.routers.misc_routers import wishlist_router, weather_router, chatbot_router, admin_router
 
 app = FastAPI(title="DermaNova AI API", version="1.0.0")
@@ -24,6 +31,7 @@ app.include_router(users_router.router)
 app.include_router(analysis_router.router)
 app.include_router(products_router.router)
 app.include_router(recommendations_router.router)
+app.include_router(saved_products_router.router)
 app.include_router(wishlist_router)
 app.include_router(weather_router)
 app.include_router(chatbot_router)
