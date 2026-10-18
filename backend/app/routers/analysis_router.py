@@ -98,53 +98,6 @@ def _serialize_recommended_product(product):
         },
     }
 
-@router.post("/skin")
-async def run_skin_analysis(
-    file: UploadFile = File(...),
-    mode: str = Form("upload"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    image_bytes = await file.read()
-
-    if not image_bytes:
-        raise HTTPException(
-            status_code=400,
-            detail="Empty image upload.",
-        )
-
-    if mode not in {"live", "upload"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid analysis mode. Use 'live' or 'upload'.",
-        )
-
-    # 1. Run AI skin analysis only.
-    result = analyze_skin(image_bytes, mode=mode)
-
-    # 2. Save the analysis.
-    record = Analysis(
-        user_id=current_user.id,
-        mode="skin",
-        detected_type=result["detected_type"],
-        detected_issues=result["detected_issues"],
-        scores=result["scores"],
-        face_detected=result["face_detected"],
-    )
-
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-
-    # 3. Return the scan immediately.
-    # Product research happens in a separate endpoint.
-    return {
-        "analysis_id": record.id,
-        **result,
-        "major_recommendation": None,
-        "morning_routine": [],
-        "evening_routine": [],
-    }
 
 @router.post("/skin")
 async def run_skin_analysis(
@@ -172,13 +125,14 @@ async def run_skin_analysis(
 
     # 2. Save the analysis.
     record = Analysis(
-        user_id=current_user.id,
-        mode="skin",
-        detected_type=result["detected_type"],
-        detected_issues=result["detected_issues"],
-        scores=result["scores"],
-        face_detected=result["face_detected"],
-    )
+    user_id=current_user.id,
+    mode="skin",
+    detected_type=result["detected_type"],
+    detected_issues=result["detected_issues"],
+    scores=result["scores"],
+    result_data=result,
+    face_detected=result["face_detected"],
+)
 
     db.add(record)
     db.commit()
@@ -187,12 +141,19 @@ async def run_skin_analysis(
     # 3. Return the scan immediately.
     # Product research happens in a separate endpoint.
     return {
-        "analysis_id": record.id,
-        **result,
-        "major_recommendation": None,
-        "morning_routine": [],
-        "evening_routine": [],
-    }
+    **(record.result_data or {}),
+    "analysis_id": record.id,
+    "mode": record.mode,
+    "detected_type": record.detected_type,
+    "detected_issues": record.detected_issues,
+    "scores": record.scores,
+    "face_detected": record.face_detected,
+    "created_at": (
+        record.created_at.isoformat()
+        if record.created_at
+        else None
+    ),
+}
 
 
 @router.get("/history/{analysis_id}/recommendations")
@@ -345,12 +306,14 @@ def get_skin_report(
             detail="Saved scan not found."
         )
 
+    
     return {
+        **(record.result_data or {}),
         "analysis_id": record.id,
         "mode": record.mode,
         "detected_type": record.detected_type,
-        "detected_issues": record.detected_issues,
-        "scores": record.scores,
+        "detected_issues": record.detected_issues or [],
+        "scores": record.scores or {},
         "face_detected": record.face_detected,
         "created_at": (
             record.created_at.isoformat()
@@ -358,6 +321,7 @@ def get_skin_report(
             else None
         ),
     }
+
 
 
 # ============================================================

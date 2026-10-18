@@ -1,3 +1,4 @@
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -7,12 +8,13 @@ from sqlalchemy import (
     Text,
     DateTime,
     ForeignKey,
-    JSON
+    JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
+
 from app.database import Base
-from sqlalchemy import UniqueConstraint
 
 
 class User(Base):
@@ -36,7 +38,17 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     analyses = relationship("Analysis", back_populates="user")
-    wishlist_items = relationship("WishlistItem", back_populates="user")
+
+    wishlist_items = relationship(
+        "WishlistItem",
+        back_populates="user",
+    )
+
+    saved_products = relationship(
+        "SavedProduct",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class Product(Base):
@@ -61,11 +73,10 @@ class Product(Base):
     description = Column(Text, nullable=True)
     purchase_link = Column(String(500), nullable=True)
 
-    # One Product can have many store offers
     offers = relationship(
         "ProductOffer",
         back_populates="product",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
     )
 
 
@@ -73,21 +84,22 @@ class ProductOffer(Base):
     __tablename__ = "product_offers"
 
     id = Column(Integer, primary_key=True, index=True)
+
     product_id = Column(
         Integer,
         ForeignKey("products.id"),
-        nullable=False
+        nullable=False,
     )
+
     store = Column(String(30), nullable=False)
     price = Column(Float, nullable=False)
     purchase_link = Column(String(1000), nullable=False)
     availability = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Each offer belongs to one Product
     product = relationship(
         "Product",
-        back_populates="offers"
+        back_populates="offers",
     )
 
 
@@ -96,15 +108,18 @@ class Analysis(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    mode = Column(String(10), nullable=False)  # 'skin' or 'hair'
+    mode = Column(String(10), nullable=False)
     image_url = Column(String(500), nullable=True)
     detected_type = Column(String(30), nullable=True)
     detected_issues = Column(JSON, nullable=False, default=list)
+
     scores = Column(
         JSON,
         nullable=False,
-        default=dict
-    )  # {"health":.., "hydration":.., "oiliness":.., "confidence":..}
+        default=dict,
+    )
+
+    result_data = Column(JSON, nullable=True)
     face_detected = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -118,10 +133,7 @@ class Recommendation(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     analysis_id = Column(Integer, ForeignKey("analyses.id"), nullable=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    routine_slot = Column(
-        String(20),
-        nullable=True
-    )  # morning / night / weekly / monthly
+    routine_slot = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -133,7 +145,10 @@ class WishlistItem(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    user = relationship("User", back_populates="wishlist_items")
+    user = relationship(
+        "User",
+        back_populates="wishlist_items",
+    )
 
 
 class History(Base):
@@ -174,5 +189,58 @@ class SavedScan(Base):
             "user_id",
             "analysis_id",
             name="uq_saved_scan_user_analysis",
+        ),
+    )
+
+
+class SavedProduct(Base):
+    __tablename__ = "saved_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    # Stable identifier used to prevent duplicate saves.
+    product_key = Column(String(500), nullable=False)
+
+    # Product details are stored as a snapshot.
+    product_name = Column(String(200), nullable=False)
+    brand = Column(String(120), nullable=True)
+    category = Column(String(100), nullable=True)
+    price = Column(Float, nullable=True)
+    image_url = Column(String(1000), nullable=True)
+    rating = Column(Float, nullable=True)
+    description = Column(Text, nullable=True)
+    store = Column(String(120), nullable=True)
+    purchase_link = Column(String(1000), nullable=True)
+
+    # Optional link to the scan that generated the recommendation.
+    analysis_id = Column(
+        Integer,
+        ForeignKey("analyses.id"),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    user = relationship(
+        "User",
+        back_populates="saved_products",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "product_key",
+            name="uq_saved_product_user_key",
         ),
     )
