@@ -17,10 +17,7 @@ treated as medical diagnoses.
 """
 
 from app.ml.yolo_detector import detect_skin
-from app.services.recommendation_service import (
-    generate_recommendations,
-    build_full_recommendation
-)
+
 from app.ml.face_mesh import (
     extract_face,
     get_under_eye_regions,
@@ -2249,18 +2246,8 @@ def analyze_skin(
         detections,
         visual
     )
-    recommendations = generate_recommendations(
-        skin_type=skin_type,
-        issues=all_issues,
-        hydration=visual["hydration"],
-        oiliness=visual["oiliness"],
-)
-    full_recommendation = build_full_recommendation(
-    skin_type=skin_type,
-    issues=all_issues,
-    hydration=visual["hydration"],
-    oiliness=visual["oiliness"],
-)
+    
+   
 
     # --------------------------------------------------------
     # YOLO confidence
@@ -2308,9 +2295,7 @@ def analyze_skin(
         "detected_type": skin_type,
 
         "detected_issues": all_issues,
-        "recommendations": recommendations,
-        "full_recommendation": full_recommendation,
-
+        
         "detections": detections,
 
         "skin_metrics": {
