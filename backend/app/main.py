@@ -12,6 +12,7 @@ from app.routers import (
     saved_products_router,
 )
 from app.routers.misc_routers import wishlist_router, weather_router, chatbot_router, admin_router
+from app.routers import hair
 
 app = FastAPI(title="DermaNova AI API", version="1.0.0")
 
@@ -36,6 +37,7 @@ app.include_router(wishlist_router)
 app.include_router(weather_router)
 app.include_router(chatbot_router)
 app.include_router(admin_router)
+app.include_router(hair.router, prefix="/api")
 
 
 @app.on_event("startup")
