@@ -75,3 +75,4 @@ def me(current_user: User = Depends(get_current_user)):
         "profile_picture_url": current_user.profile_picture_url,
         "is_admin": current_user.is_admin,
     }
+

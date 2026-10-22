@@ -473,4 +473,117 @@ def unsave_scan(
         "message": "Scan removed from saved scans.",
         "analysis_id": analysis_id,
         "saved": False,
+   
     }
+
+
+# ============================================================
+# SKIN PROGRESS TRACKER
+# ============================================================
+
+@router.get("/progress")
+def get_skin_progress(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return chronological skin-analysis history and progress
+    comparisons for the authenticated user.
+    """
+
+    records = (
+        db.query(Analysis)
+        .filter(
+            Analysis.user_id == current_user.id,
+            Analysis.mode == "skin",
+        )
+        .order_by(Analysis.created_at.asc(), Analysis.id.asc())
+        .all()
+    )
+
+    history = []
+
+    for record in records:
+        scores = record.scores or {}
+
+        history.append({
+            "analysis_id": record.id,
+            "created_at": (
+                record.created_at.isoformat()
+                if record.created_at
+                else None
+            ),
+            "detected_type": record.detected_type,
+            "detected_issues": record.detected_issues or [],
+            "scores": {
+                "health": scores.get("health"),
+                "oiliness": scores.get("oiliness"),
+                "hydration": scores.get("hydration"),
+                "confidence": scores.get("confidence"),
+            },
+        })
+
+    latest = history[-1] if history else None
+    previous = history[-2] if len(history) >= 2 else None
+
+    comparisons = {}
+
+    score_names = [
+        "health",
+        "oiliness",
+        "hydration",
+        "confidence",
+    ]
+
+    for name in score_names:
+        latest_score = (
+            latest["scores"].get(name) if latest else None
+        )
+        previous_score = (
+            previous["scores"].get(name) if previous else None
+        )
+
+        change = None
+
+        if latest_score is not None and previous_score is not None:
+            change = round(latest_score - previous_score, 1)
+
+        comparisons[name] = {
+            "latest": latest_score,
+            "previous": previous_score,
+            "change": change,
+        }
+
+    latest_issues = (
+        set(latest["detected_issues"]) if latest else set()
+    )
+    previous_issues = (
+        set(previous["detected_issues"]) if previous else set()
+    )
+
+    return {
+        "total_scans": len(history),
+        "latest_scan": latest,
+        "previous_scan": previous,
+        "comparisons": comparisons,
+        "issue_changes": {
+            "new": sorted(latest_issues - previous_issues),
+            "no_longer_detected": sorted(
+                previous_issues - latest_issues
+            ),
+            "still_detected": sorted(
+                latest_issues & previous_issues
+            ),
+        } if previous else {
+            "new": [],
+            "no_longer_detected": [],
+            "still_detected": [],
+        },
+        "history": history,
+        "disclaimer": (
+            "Scores are image-based estimates. Differences between "
+            "scans may reflect lighting, camera, or image conditions "
+            "and do not establish medical improvement or worsening."
+        ),
+    }
+
